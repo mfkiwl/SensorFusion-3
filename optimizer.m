@@ -75,8 +75,9 @@ classdef optimizer < handle
                 obj.bias = [obj.bias {bias}];
             end
             
+            % Create Initial value for vehicle parameters
             if strcmp(obj.mode,'partial')
-                obj.params =  [1.5; 0; 0.6];  
+                obj.params =  [1.5; 0; 1];  
             end
 
             % Perform Pre-integration
@@ -85,7 +86,7 @@ classdef optimizer < handle
             % Perform INS propagation
             obj.ins();
             
-            % Create Initial value for vehicle parameters
+            
             
 
             % If mode is full, 2-phase, create initial value for lane
@@ -259,7 +260,7 @@ classdef optimizer < handle
             if strcmp(obj.mode,'basic')
                 obj.opt.x0 = zeros(15*n,1);
             elseif strcmp(obj.mode,'partial')
-                obj.opt.x0 = zeros(16*n+3,1);
+                obj.opt.x0 = zeros(16*n+1,1);
             end
             
             % Run optimization depending on algorithm options
@@ -280,26 +281,26 @@ classdef optimizer < handle
             disp('[SNLS solver: Gauss-Newton Method]')
             fprintf(' Iteration     f(x)           step\n');
             formatstr = ' %5.0f   %13.6g  %13.6g ';
-            
-            obj.cost_func(obj.opt.x0);
-            prev_cost = obj.opt.res' * obj.opt.res;
-            str = sprintf(formatstr,0,prev_cost,norm(obj.opt.x0));
+            x0 = obj.opt.x0;
+            [res,jac] = obj.cost_func(x0);
+            prev_cost = res' * res;
+            str = sprintf(formatstr,0,prev_cost,norm(x0));
             disp(str)
 
             i = 1;
 
             while true
-                A = obj.opt.jac' * obj.opt.jac;
-                b = -obj.opt.jac' * obj.opt.res;
+                A = jac' * jac;
+                b = -jac' * res;
 
-                obj.opt.x0 = A \ b;
+                x0 = A \ b;
                 
-                obj.cost_func(obj.opt.x0);
+                [res,jac] = obj.cost_func(x0);
 
-                cost = obj.opt.res' * obj.opt.res;
-                step_size = norm(obj.opt.x0);
+                cost = res' * res;
+                step_size = norm(x0);
                 
-                str = sprintf(formatstr,i,cost,norm(obj.opt.x0));
+                str = sprintf(formatstr,i,cost,step_size);
                 disp(str)
                 
                 % Ending Criterion
@@ -310,7 +311,7 @@ classdef optimizer < handle
 
                 if length(find(obj.opt.flags)) ~= length(obj.opt.flags) % If any of the criterion is not met, end loop
                     
-                    obj.retract(obj.opt.x0,'final');
+                    obj.retract(x0,'final');
 
                     disp('[Optimization Finished...]')
                     idx = find(~obj.opt.flags,1);
@@ -413,40 +414,130 @@ classdef optimizer < handle
 
         %% Trust Region Method
         function obj = TrustRegion(obj)
+            % Indefinite Gauss-Newton-Powell's Dog-Leg algorithm
+            % Implemented "RISE: An Incremental Trust Region Method for Robust Online Sparse Least-Squares Estimation"
+            % by David M. Rosen etal
+            % 
+            % Implemented in MATLAB by JinHwan Jeon, 2022
+            %
+            % Original paper considers case for rank-deficient Jacobians,
+            % but in this sensor fusion framework, Jacobian must always be
+            % full rank. Therefore, 'rank-deficient Jacobian' part of the
+            % algorithm is not implemented.
 
+            disp('[SNLS solver: Approximate Trust Region Method]')
+            fprintf(' Iteration      f(x)        step        TR_radius    Acceptance\n');
+            formatstr = ' %5.0f        %-10.3g   %-10.3g   %-10.3g    %s';
+            x0 = obj.opt.x0;
+            tr_rad = 10; % Initial Trust Region radius
+            [res,jac] = obj.cost_func(x0);
+            prev_cost = res' * res;
+            str = sprintf(formatstr,0,prev_cost,norm(x0),tr_rad,'Init');
+            disp(str)
+
+            i = 1;
+
+            eta1 = obj.opt.options.TR.eta1;
+            eta2 = obj.opt.options.TR.eta2;
+            gamma1 = obj.opt.options.TR.gamma1;
+            gamma2 = obj.opt.options.TR.gamma2;
+
+            while true
+                A = jac' * jac; b = -jac' * res; 
+                h_gn = A \ b; % Gauss-Newton Step
+
+                alpha = (b' * b)/(b' * A * b);
+                h_gd = alpha * b; % Gradient Descent Step
+                
+                x0 = ComputeDogLeg(h_gn,h_gd,tr_rad);
+                
+                dummy_states = obj.states; % need to check if change in dummy state changes obj.states
+                dummy_bias = obj.bias;
+                dummy_imu = obj.imu;
+
+                [res_,jac_] = obj.cost_func(x0);
+                cost = res_' * res_;
+
+                ared = prev_cost - cost;
+                pred = b' * x0 - 1/2 * x0' * A * x0;
+                rho = ared/pred; 
+                
+                if rho >= eta1
+                    % Current Step Accepted, update loop variables
+                    res = res_;
+                    jac = jac_;
+                    prev_cost = cost;
+                    string = 'Accepted';
+                    flag = true;
+                else
+                    % Current Step Rejected, recover states, bias, 
+                    % imu(preintegrated terms) using dummy variables
+                    obj.states = dummy_states;
+                    obj.bias = dummy_bias;
+                    obj.imu = dummy_imu;
+                    string = 'Rejected';
+                    flag = false;
+                end
+                
+                step_size = norm(x0);
+                
+                str = sprintf(formatstr,i,cost,step_size,tr_rad,string);
+                disp(str)
+                
+                tr_rad = UpdateDelta(rho,tr_rad,eta1,eta2,gamma1,gamma2);
+                
+                if flag % Check Ending Criterion for Accepted Steps
+                    obj.opt.flags = [];
+                    obj.opt.flags = [obj.opt.flags abs(ared) > obj.opt.options.CostThres];
+                    obj.opt.flags = [obj.opt.flags step_size > obj.opt.options.StepThres];
+                    obj.opt.flags = [obj.opt.flags i < obj.opt.options.IterThres];
+    
+                    if length(find(obj.opt.flags)) ~= length(obj.opt.flags) % If any of the criterion is not met, end loop
+                        
+                        obj.retract(x0,'final');
+    
+                        disp('[Optimization Finished...]')
+                        idx = find(~obj.opt.flags,1);
+                        
+                        if idx == 1
+                            disp(['Current cost difference ',num2str(abs(ared)),' is below threshold: ',num2str(obj.opt.options.CostThres)])
+                        elseif idx == 2
+                            disp(['Current step size ',num2str(step_size),' is below threshold: ',num2str(obj.opt.options.StepThres)])
+                        elseif idx == 3
+                            disp(['Current iteration number ',num2str(i),' is above threshold: ',num2str(obj.opt.options.IterThres)])
+                        end
+    
+                        break;
+                    end
+
+                    i = i + 1;
+                end
+            end
         end
 
         %% Optimization Cost Function
-        function cost_func(obj,x0)
+        function [res,jac] = cost_func(obj,x0)
             obj.retract(x0,'normal');
-            obj.opt.x0 = x0;
+            [Pr_res,Pr_jac] = obj.CreatePrBlock();
+            [MM_res,MM_jac] = obj.CreateMMBlock();
+            [GNSS_res,GNSS_jac] = obj.CreateGNSSBlock();
+            [WSS_res,WSS_jac] = obj.CreateWSSBlock();
 
-            obj.CreatePrBlock();
-            obj.CreateMMBlock();
-            obj.CreateGNSSBlock();
-            obj.CreateWSSBlock();
-
-            obj.opt.res = vertcat(obj.opt.Pr_res,...
-                                  obj.opt.MM_res,....
-                                  obj.opt.GNSS_res,...
-                                  obj.opt.WSS_res);
-            obj.opt.jac = vertcat(obj.opt.Pr_jac,...
-                                  obj.opt.MM_jac,...
-                                  obj.opt.GNSS_jac,...
-                                  obj.opt.WSS_jac);
+            res = vertcat(Pr_res,MM_res,GNSS_res,WSS_res);
+            jac = vertcat(Pr_jac,MM_jac,GNSS_jac,WSS_jac);            
         end
         
         %% Prior Residual and Jacobian
-        function obj = CreatePrBlock(obj)
+        function [Pr_res,Pr_jac] = CreatePrBlock(obj)
             n = length(obj.states);
             blk_width = 15*n;
             blk_height = 15;
             adder = 0;
             if strcmp(obj.mode,'partial')
-                blk_width = blk_width + n + 3;
-                adder = n + 3;
+                blk_width = blk_width + n;
+                adder = n ;
                 
-                blk_height = blk_height + n + 3;
+                blk_height = blk_height + n;
             elseif strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
                 % Add prev_num states
             end
@@ -499,30 +590,22 @@ classdef optimizer < handle
                     I(9*3+6+i) = 15+i;
                     J(9*3+6+i) = 15*n+i;
                     V(9*3+6+i) = InvMahalanobis(1,obj.covs.prior.WSF);
-                end
-                
-                % Vehicle Parameters Prior
-                
-                params_ = obj.opt.init_state.L;
-                Params_res = InvMahalanobis(obj.params - params_,obj.covs.prior.Params);
-                I(9*3+6+n+1:9*3+6+n+3) = 15+n+1:15+n+3;
-                J(9*3+6+n+1:9*3+6+n+3) = 16*n+1:16*n+3;
-                V(9*3+6+n+1:9*3+6+n+3) = diag(InvMahalanobis(eye(3),obj.covs.prior.Params));
+                end                
             end
             
-            obj.opt.Pr_res = [Veh_res; Bias_res; WSS_res; Params_res];
-            obj.opt.Pr_jac = sparse(I,J,V,blk_height,blk_width);
+            Pr_res = [Veh_res; Bias_res; WSS_res; Params_res];
+            Pr_jac = sparse(I,J,V,blk_height,blk_width);
         end
         
         %% IMU Residual and Jacobian
-        function obj = CreateMMBlock(obj)
+        function [MM_res,MM_jac] = CreateMMBlock(obj)
             n = length(obj.states);
             blk_width = 15*n;
 %             blk_height = 15 * (n-1);
             grav = [0;0;-9.81];
 
             if strcmp(obj.mode,'partial')
-                blk_width = blk_width + n + 3;
+                blk_width = blk_width + n;
                 I_s = zeros(1,2*(n-1)); J_s = I_s; V_s = I_s;
                 s_cov = obj.covs.imu.ScaleFactorNoise;
                 WSF_res = zeros(n-1,1);
@@ -611,21 +694,21 @@ classdef optimizer < handle
             Veh_jac = sparse(I_v,J_v,V_v,9*(n-1),blk_width);
             Bias_jac = sparse(I_b,J_b,V_b,6*(n-1),blk_width);
 
-            obj.opt.MM_res = [Veh_res;Bias_res];
-            obj.opt.MM_jac = [Veh_jac;Bias_jac];
+            MM_res = [Veh_res;Bias_res];
+            MM_jac = [Veh_jac;Bias_jac];
             
             if strcmp(obj.mode,'partial')
                 % Augment WSF residual and jacobian
                 WSF_jac = sparse(I_s,J_s,V_s,n-1,blk_width);
                 
-                obj.opt.MM_res = [obj.opt.MM_res; WSF_res];
-                obj.opt.MM_jac = [obj.opt.MM_jac; WSF_jac];
+                MM_res = [MM_res; WSF_res];
+                MM_jac = [MM_jac; WSF_jac];
             end
 
         end
 
         %% GNSS Residual and Jacobian
-        function obj = CreateGNSSBlock(obj)
+        function [GNSS_res,GNSS_jac] = CreateGNSSBlock(obj)
             idxs = obj.gnss.state_idxs;
             n = length(idxs);
             
@@ -633,12 +716,12 @@ classdef optimizer < handle
             blk_width = 15*m;
 
             if strcmp(obj.mode,'partial')
-                blk_width = blk_width + m + 3;
+                blk_width = blk_width + m;
             elseif strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
                 % Add prev_num states
             end
             blk_height = 3*n;
-            gnss_res = zeros(blk_height,1);
+            GNSS_res = zeros(blk_height,1);
             I_g = zeros(1,3*3*n); J_g = I_g; V_g = I_g;
 
             for i=1:n
@@ -650,26 +733,24 @@ classdef optimizer < handle
                 vAcc = obj.gnss.vAcc(i);
                 cov = diag([hAcc^2 hAcc^2 vAcc^2]);
 
-                gnss_res((3*(i-1)+1):3*i) = InvMahalanobis(Pi-P_meas,cov);
+                GNSS_res((3*(i-1)+1):3*i) = InvMahalanobis(Pi-P_meas,cov);
                 
                 [I_,J_,V_] = sparseFormat((3*(i-1)+1):3*i,9*(idx-1)+7:9*(idx-1)+9,InvMahalanobis(Ri,cov));
                 I_g((9*(i-1)+1):9*i) = I_;
                 J_g((9*(i-1)+1):9*i) = J_;
                 V_g((9*(i-1)+1):9*i) = V_;
             end
-
-            obj.opt.GNSS_res = gnss_res;
-            obj.opt.GNSS_jac = sparse(I_g,J_g,V_g,blk_height,blk_width);
+            GNSS_jac = sparse(I_g,J_g,V_g,blk_height,blk_width);
         end
         
         %% WSS Residual and Jacobian
-        function obj = CreateWSSBlock(obj)
+        function [WSS_res,WSS_jac] = CreateWSSBlock(obj)
             if strcmp(obj.mode,'basic')
-                obj.opt.WSS_res = [];
-                obj.opt.WSS_jac = [];
+                WSS_res = [];
+                WSS_jac = [];
             else
                 n = length(obj.states);
-                blk_width = 16*n + 3;
+                blk_width = 16*n;
                 
                 if strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
                     % Add prev_num states
@@ -677,8 +758,8 @@ classdef optimizer < handle
                 
                 L = obj.params;
     
-                wss_res = zeros(3*(n-2),1);
-                m = 9*4+3;
+                WSS_res = zeros(3*(n-2),1);
+                m = 9*3+3;
                 I = zeros(1,m*(n-2)); J = I; V = I; 
                 wss_cov = obj.covs.wss;
 
@@ -693,22 +774,20 @@ classdef optimizer < handle
                     V_meas = [obj.can.whl_spd(idx); 0; 0]; % Vehicle Nonholonomic Constraint
 
                     res =  1/Si * (Ri' * Vi - skew(wi - bgi - bgdi) * L) - V_meas;
-                    wss_res(3*(i-2)+1:3*(i-2)+3) = InvMahalanobis(res,wss_cov);
+                    WSS_res(3*(i-2)+1:3*(i-2)+3) = InvMahalanobis(res,wss_cov);
     
-                    [Jrv,Jbg,Js,Jl] = getWSSJac(Ri,Vi,Si,wi,bgi,bgdi,L);
+                    [Jrv,Jbg,Js] = getWSSJac(Ri,Vi,Si,wi,bgi,bgdi,L);
 
                     [I_rv,J_rv,V_rv] = sparseFormat(3*(i-2)+1:3*(i-2)+3,9*(i-1)+1:9*(i-1)+6,InvMahalanobis(Jrv,wss_cov));
                     [I_bg,J_bg,V_bg] = sparseFormat(3*(i-2)+1:3*(i-2)+3,9*n+6*(i-1)+1:9*n+6*(i-1)+3,InvMahalanobis(Jbg,wss_cov));
                     [I_s,J_s,V_s] = sparseFormat(3*(i-2)+1:3*(i-2)+3,15*n+i,InvMahalanobis(Js,wss_cov));
-                    [I_l,J_l,V_l] = sparseFormat(3*(i-2)+1:3*(i-2)+3,16*n+1:16*n+3,InvMahalanobis(Jl,wss_cov));
                     
-                    I(m*(i-2)+1:m*(i-1)) = [I_rv I_bg I_s I_l];
-                    J(m*(i-2)+1:m*(i-1)) = [J_rv J_bg J_s J_l];
-                    V(m*(i-2)+1:m*(i-1)) = [V_rv V_bg V_s V_l];
+                    I(m*(i-2)+1:m*(i-1)) = [I_rv I_bg I_s];
+                    J(m*(i-2)+1:m*(i-1)) = [J_rv J_bg J_s];
+                    V(m*(i-2)+1:m*(i-1)) = [V_rv V_bg V_s];
                 end
 
-                obj.opt.WSS_res = wss_res;
-                obj.opt.WSS_jac = sparse(I,J,V,3*(n-2),blk_width);
+                WSS_jac = sparse(I,J,V,3*(n-2),blk_width);
             end
         end
 
@@ -724,9 +803,7 @@ classdef optimizer < handle
             
             if strcmp(obj.mode,'partial')
                 wsf_delta = delta(15*n+1:16*n);
-                param_delta = delta(16*n+1:16*n+3);
                 obj.retractWSF(wsf_delta);
-                obj.retractParams(param_delta);
                 
             elseif strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
                 % Need to develop
@@ -821,11 +898,6 @@ classdef optimizer < handle
                 WSF_ = WSF + deltaWSF;                
                 obj.states{i}.WSF = WSF_;
             end            
-        end
-
-        %% Params Retraction
-        function obj = retractParams(obj,param_delta)
-            obj.params = obj.params + param_delta;
         end
 
         %% Visualize
@@ -961,12 +1033,39 @@ function [Ji,Jj,Jb] = getIMUJac(resR,Ri,Rj,Vi,Vj,Pi,Pj,bgdi,JdelRij_bg,JdelVij_b
     Jb(7:9,4:6) = -JdelPij_ba;
 end
 
-function [Jrv,Jbg,Js,Jl] = getWSSJac(Ri,Vi,Si,wi,bgi,bgdi,L)
+function [Jrv,Jbg,Js] = getWSSJac(Ri,Vi,Si,wi,bgi,bgdi,L)
     Jrv = zeros(3,6); % Horizontally Augmented for R and V
     Jrv(:,1:3) = 1/Si * skew(Ri' * Vi);
     Jrv(:,4:6) = 1/Si * Ri';
 
     Jbg = -1/Si * skew(L);
     Js = -1/Si^2 * (Ri' * Vi - skew(wi - bgi - bgdi) * L);
-    Jl = -1/Si * skew(wi - bgi - bgdi);
+%     Jl = -1/Si * skew(wi - bgi - bgdi);
+%     Jl = Jl(:,1); % Only take the longitudinal lever arm as the optimization variable
+end
+
+function h_dl = ComputeDogLeg(h_gn,h_gd,tr_rad)
+% Compute Dog-Leg Step for Approximate Trust Region Method
+    N_hgn = norm(h_gn); N_hgd = norm(h_gd);
+    if N_hgn <= tr_rad
+        h_dl = h_gn;
+    elseif N_hgd >= tr_rad
+        h_dl = (tr_rad/N_hgd) * h_gd;
+    else
+        v = h_gn - h_gd;
+        hgdv = h_gd' * v;
+        vsq = v' * v;
+        beta = (-hgdv + sqrt(hgdv^2 + (tr_rad^2 - h_gd' * h_gd)*vsq)) / vsq;
+        h_dl = h_gd + beta * v;
+    end
+end
+
+function Delta = UpdateDelta(rho,tr_rad,eta1,eta2,gamma1,gamma2)
+    if rho >= eta2
+        Delta = gamma2 * tr_rad;
+    elseif rho < eta1
+        Delta = gamma1 * tr_rad;
+    else
+        Delta = tr_rad;
+    end
 end

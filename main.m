@@ -27,40 +27,46 @@ covs_.prior.P = diag([5^2, 5^2, 5^2]);
 covs_.prior.Bg = diag([1e-4, 1e-4, 1e-4]);
 covs_.prior.Ba = diag([0.1^2, 0.1, 0.1^2]);
 covs_.prior.WSF = 1e-2;
-covs_.prior.Params = diag([0.1^2,1e-6,0.1^2]);
+% covs_.prior.Params = diag([1e-4,1e-6,1e-4]);
+covs_.prior.Params = 1e-5;
 
 % IMU Accel, Gyro noise and bias randomwalk, ScaleFactorNoise
 covs_.imu = struct();
 covs_.imu.GyroscopeBiasNoise = 5e-10 * eye(3);
 covs_.imu.GyroscopeNoise = 1e-5 * eye(3);
-covs_.imu.AccelerometerBiasNoise = 5e-6* eye(3);
+covs_.imu.AccelerometerBiasNoise = 5e-7* eye(3);
 covs_.imu.AccelerometerNoise = 5/3 * 1e-3 * eye(3);
-covs_.imu.ScaleFactorNoise = 1e-6;
+covs_.imu.ScaleFactorNoise = 1e-2;
 
 % WSS 
-covs_.wss = 1e-4 * eye(3);
+covs_.wss = 1e-6 * eye(3);
 
 % Optimization Options
 options = struct();
 options.CostThres = 1e-6;
 options.StepThres = 1e-6;
-options.IterThres = 30;
-options.Algorithm = 'GN';
-% GN : Gauss-Newton
+options.IterThres = 100;
+options.Algorithm = 'TR';
+% GN : Gauss-Newton (May be fast, but no guarantee of stable convergence)
 % LM : Levenberg-Marquardt(To Be Done)
-% TR : Trust-Region(To Be Done)
+% TR : Trust-Region (Recommended for stable convergence)
 
+% If selected algorithm is TR, need to define parameters additionally
+options.TR = struct();
+options.TR.eta1 = 0.6;
+options.TR.eta2 = 0.9;
+options.TR.gamma1 = 0.1;
+options.TR.gamma2 = 2;
 
 
 %% INS + GNSS Fusion 
 % sol = struct();
-sol.basic = optimizer(imu_,gnss_,lane_,can_,bias_,t_,covs_,'basic',options);
-sol.basic.optimize();
-%%
-sol.basic.visualize();
+% sol.basic = optimizer(imu_,gnss_,lane_,can_,bias_,t_,covs_,'basic',options);
+% sol.basic.optimize();
+% sol.basic.visualize();
 
 %% INS + GNSS + WSS Fusion
-% sol = struct();
-% sol.partial = optimizer(imu_,gnss_,lane_,can_,bias_,t_,covs_,'partial',options);
-% sol.partial.optimize();
-% sol.partial.visualize();
+sol = struct();
+sol.partial = optimizer(imu_,gnss_,lane_,can_,bias_,t_,covs_,'partial',options);
+sol.partial.optimize();
+sol.partial.visualize();
