@@ -1,0 +1,340 @@
+classdef dataprocessor < handle
+    properties
+        raw_data = struct()
+        data = struct()
+        proc_data = struct() 
+    end
+    methods
+        %% Constructor
+        function obj = dataprocessor(varargin)
+            imu = varargin{1};
+            gnss = varargin{2};
+            gnss.raw_idx = gnss.raw_idx + 1;
+            can = varargin{3};
+            lane = varargin{4};
+            
+            obj.raw_data.imu = imu;
+            obj.raw_data.gnss = gnss;
+            obj.raw_data.can = can;
+            obj.raw_data.lane = lane;
+
+        end
+
+        %% Process data
+        function obj = process(obj)
+            disp('[Beginning data processing...]')
+            % Find non-static time intervals from wheel speed data
+            valid_can_idxs = find(obj.raw_data.can.whl_spd > 0);
+            
+            obj.raw_data.can.valid_idxs = valid_can_idxs;
+            obj.raw_data.can.valid_t = obj.raw_data.can.t(valid_can_idxs);
+            
+            lb = obj.raw_data.can.valid_idxs(1);
+            obj.raw_data.t_intv = [];
+            for i=1:length(obj.raw_data.can.valid_idxs)-1
+                if obj.raw_data.can.valid_idxs(i+1) - obj.raw_data.can.valid_idxs(i) > 1                    
+                    ub = obj.raw_data.can.valid_idxs(i);
+                    obj.raw_data.can.t_intv = [obj.raw_data.can.t_intv; obj.raw_data.can.t(lb-1) obj.raw_data.can.t(ub+1)];
+                    lb = obj.raw_data.can.valid_idxs(i+1);
+                end
+            end
+            ub = obj.raw_data.can.valid_idxs(end);
+            obj.raw_data.t_intv = [obj.raw_data.t_intv; obj.raw_data.can.t(lb-1) obj.raw_data.can.t(ub+1)];
+            
+            t_intv = obj.raw_data.t_intv;
+            % Filter out invalid gnss measurements
+            not_outage_idxs = find(obj.raw_data.gnss.hAcc < 3); % Remove GNSS measurements with hAcc larger than 3m
+            obj.raw_data.gnss.t = obj.raw_data.gnss.t(not_outage_idxs);
+            obj.raw_data.gnss.pos = obj.raw_data.gnss.pos(not_outage_idxs,:);
+            obj.raw_data.gnss.hAcc = obj.raw_data.gnss.hAcc(not_outage_idxs);
+            obj.raw_data.gnss.vAcc = obj.raw_data.gnss.vAcc(not_outage_idxs);
+            obj.raw_data.gnss.vNED = obj.raw_data.gnss.vNED(not_outage_idxs,:);
+            obj.raw_data.gnss.bearing = obj.raw_data.gnss.bearing(not_outage_idxs);
+            obj.raw_data.gnss.raw_idx = obj.raw_data.gnss.raw_idx(not_outage_idxs);
+            
+            obj.data.gnss = {};
+            obj.data.imu = {};
+            
+            gnss_ = struct();
+            gnss_.t = [];
+            gnss_.t_bias = 0;
+            gnss_.lla_ref = obj.raw_data.gnss.lla_ref;
+            gnss_.pos = [];
+            gnss_.hAcc = [];
+            gnss_.vAcc = [];
+            gnss_.vNED = [];
+            gnss_.bearing = [];
+            gnss_.raw_idx = [];
+            
+            % Vehicle Local Frame: NED
+            [accel_t,uniqueIdx] = unique(obj.raw_data.imu.accel.t');
+            accel_meas = obj.raw_data.imu.accel.meas(uniqueIdx,:);
+            accel_ = zeros(size(accel_meas));
+            accel_(:,1) = -accel_meas(:,3);
+            accel_(:,2) = accel_meas(:,2);
+            accel_(:,3) = accel_meas(:,1); % need to consider gravitational effects
+            
+            [gyro_t,uniqueIdx] = unique(obj.raw_data.imu.gyro.t');
+            gyro_meas = obj.raw_data.imu.gyro.meas(uniqueIdx,:);
+            gyro_ = zeros(size(gyro_meas));
+            gyro_(:,1) = -gyro_meas(:,3);
+            gyro_(:,2) = gyro_meas(:,2);
+            gyro_(:,3) = gyro_meas(:,1); 
+            
+%             disp('Displaying raw IMU data...')
+%             figure(1);
+%             plot(accel_(:,1),'r-'); hold on; grid on;
+%             plot(accel_(:,2),'g-');
+%             plot(accel_(:,3),'b-');
+% 
+%             figure(2);
+%             plot(gyro_(:,1),'r-'); hold on; grid on;
+%             plot(gyro_(:,2),'g-');
+%             plot(gyro_(:,3),'b-');
+
+            cnt = 1;
+            % Need to fix if vehicle is not stopping near the final part of
+            % dataset
+            for i=1:length(obj.raw_data.gnss.t)
+                if obj.raw_data.gnss.t(i) >= t_intv(cnt,1) && obj.raw_data.gnss.t(i) <= t_intv(cnt,2)
+                    gnss_.t = [gnss_.t obj.raw_data.gnss.t(i)];
+                    gnss_.pos = [gnss_.pos; obj.raw_data.gnss.pos(i,:)];
+                    gnss_.hAcc = [gnss_.hAcc obj.raw_data.gnss.hAcc(i)];
+                    gnss_.vAcc = [gnss_.vAcc obj.raw_data.gnss.vAcc(i)];
+                    gnss_.vNED = [gnss_.vNED; obj.raw_data.gnss.vNED(i,:)];
+                    gnss_.bearing = [gnss_.bearing obj.raw_data.gnss.bearing(i)];
+                    gnss_.raw_idx = [gnss_.raw_idx obj.raw_data.gnss.raw_idx(i)];
+                elseif obj.raw_data.gnss.t(i) > t_intv(cnt,2)
+                    % Create IMU timestamps for interpolation
+                    t_bias = gnss_.t_bias;
+                    obj.data.gnss = [obj.data.gnss {gnss_}];
+
+                    imu_ = struct();                    
+                    t_lb = gnss_.t(1); t_ub = gnss_.t(end);
+                    imu_.t = t_lb:0.01:t_ub;
+                    imu_.t_bias = t_bias;
+                    imu_.accel = interp1(accel_t,accel_,imu_.t,'linear','extrap');
+                    imu_.gyro = interp1(gyro_t,gyro_,imu_.t,'linear','extrap');
+
+                    obj.data.imu = [obj.data.imu {imu_}];
+                    
+                    if size(t_intv,1) == cnt
+                        break;
+                    else
+                        
+                        gnss_ = struct();
+                        gnss_.t = [];
+                        gnss_.t_bias = t_bias + t_intv(cnt+1,1) - t_intv(cnt,2);
+                        gnss_.lla_ref = obj.raw_data.gnss.lla_ref;
+                        gnss_.pos = [];
+                        gnss_.hAcc = [];
+                        gnss_.vAcc = [];
+                        gnss_.vNED = [];
+                        gnss_.bearing = [];
+                        gnss_.raw_idx = [];
+                        
+                        cnt = cnt + 1;
+                    end
+                end
+            end
+
+            %% For each non-static interval, create additional timestamps for GNSS outages
+            obj.data.base_unix_timestamp = obj.data.gnss{1}.t(1);
+            base_t = obj.data.base_unix_timestamp;
+
+            m = length(obj.data.gnss);
+            obj.proc_data.full_t = [];
+            obj.proc_data.t = [];
+            obj.proc_data.gnss = struct();
+            obj.proc_data.gnss.t = obj.data.gnss{1}.t; % Change in the future for multi-static dataset
+            obj.proc_data.gnss.state_idxs = [];
+            obj.proc_data.gnss.pos = [];
+            obj.proc_data.gnss.hAcc = [];
+            obj.proc_data.gnss.vAcc = [];
+            obj.proc_data.gnss.bearing = [];
+            obj.proc_data.gnss.vNED = [];
+            obj.proc_data.gnss.lla0 = obj.data.gnss{1}.lla_ref;
+
+            cnt = 0;
+
+            for i=1:m
+                obj.data.gnss{i}.full_t = [];
+                n = length(obj.data.gnss{i}.raw_idx);
+                t_bias = obj.data.gnss{i}.t_bias;
+                
+                % Augment GNSS data
+                obj.proc_data.gnss.pos = [obj.proc_data.gnss.pos; obj.data.gnss{i}.pos];
+                obj.proc_data.gnss.hAcc = [obj.proc_data.gnss.hAcc obj.data.gnss{i}.hAcc];
+                obj.proc_data.gnss.vAcc = [obj.proc_data.gnss.vAcc obj.data.gnss{i}.vAcc];
+                obj.proc_data.gnss.bearing = [obj.proc_data.gnss.bearing obj.data.gnss{i}.bearing];
+                obj.proc_data.gnss.vNED = [obj.proc_data.gnss.vNED; obj.data.gnss{i}.vNED];
+
+                for j = 1:n-1
+                    % Add gnss idxs(state_relative)
+                    obj.proc_data.gnss.state_idxs = [obj.proc_data.gnss.state_idxs cnt + length(obj.data.gnss{i}.full_t) + 1];
+
+                    if obj.data.gnss{i}.raw_idx(j+1) - obj.data.gnss{i}.raw_idx(j) > 1
+                        
+                        % Error may occur if gnss timestamp spacing is
+                        % exact, which is actually very unlikely.
+
+                        obj.data.gnss{i}.full_t = [obj.data.gnss{i}.full_t obj.data.gnss{i}.t(j):0.1:obj.data.gnss{i}.t(j+1)-0.1];
+                        obj.proc_data.t = [obj.proc_data.t (obj.data.gnss{i}.t(j):0.1:obj.data.gnss{i}.t(j+1)-0.1)-t_bias-base_t];
+                        obj.proc_data.full_t = [obj.proc_data.full_t obj.data.gnss{i}.t(j):0.1:obj.data.gnss{i}.t(j+1)-0.1];
+                    else
+                        obj.data.gnss{i}.full_t = [obj.data.gnss{i}.full_t obj.data.gnss{i}.t(j)];
+                        obj.proc_data.t = [obj.proc_data.t obj.data.gnss{i}.t(j) - t_bias - base_t];
+                        obj.proc_data.full_t = [obj.proc_data.full_t obj.data.gnss{i}.t(j)];
+                    end
+                end
+                obj.proc_data.gnss.state_idxs = [obj.proc_data.gnss.state_idxs cnt + length(obj.data.gnss{i}.full_t) + 1];
+                obj.data.gnss{i}.full_t = [obj.data.gnss{i}.full_t obj.data.gnss{i}.t(end)];
+                obj.proc_data.t = [obj.proc_data.t obj.data.gnss{i}.t(end) - t_bias - base_t];
+                obj.proc_data.full_t = [obj.proc_data.full_t obj.data.gnss{i}.t(end)];
+
+                cnt = cnt + length(obj.data.gnss{i}.full_t);
+            end
+
+            %% Cluster IMU measurements
+            obj.proc_data.imu = {};
+
+            for i=1:length(obj.data.gnss)
+                full_t = obj.data.gnss{i}.full_t;
+                imu_t = obj.data.imu{i}.t;
+                t_bias = obj.data.gnss{i}.t_bias;
+                
+                accel_n = obj.data.imu{i}.accel;
+                gyro_n = obj.data.imu{i}.gyro;
+
+                for j=1:length(full_t)-1
+                    t_lb = full_t(j); t_ub = full_t(j+1);
+                    [~,idx_lb] = min(abs(imu_t - t_lb));
+                    [~,idx_ub] = min(abs(imu_t - t_ub));
+                    imu_ = struct();
+                    imu_.t = [];
+                    imu_.accel = [];
+                    imu_.gyro = [];
+                    
+                    for k=idx_lb:idx_ub-1
+                        imu_.t = [imu_.t imu_t(k) - base_t - t_bias];
+                        imu_.accel = [imu_.accel; accel_n(k,:)];
+                        imu_.gyro = [imu_.gyro; gyro_n(k,:)];
+                    end
+                    % Append last timestamp for computing dt
+                    imu_.t = [imu_.t imu_t(idx_ub) - base_t - t_bias];
+                    
+                    obj.proc_data.imu = [obj.proc_data.imu {imu_}];
+                end
+            end
+
+            %% If there exists static interval, find bias values
+
+            can_static_idxs = find(obj.raw_data.can.whl_spd == 0);
+            can_static_timestamp = obj.raw_data.can.t(can_static_idxs);
+            
+            static_intvs = [];
+            lb = can_static_timestamp(1);
+            for i=1:length(can_static_idxs)-1
+                if can_static_idxs(i+1) - can_static_idxs(i) > 1
+                    ub = can_static_timestamp(i);
+                    static_intvs = [static_intvs; lb ub];
+                    lb = can_static_timestamp(i+1);
+                end
+            end
+            static_intvs = [static_intvs; lb can_static_timestamp(end)];
+            
+            AccelBiasX = [];
+            AccelBiasY = [];
+            AccelBiasZ = [];
+            GyroBiasX = [];
+            GyroBiasY = [];
+            GyroBiasZ = [];
+            
+            cnt = 1;
+            for i=1:length(accel_t)
+                if accel_t(i) > static_intvs(cnt,1) && accel_t(i) < static_intvs(cnt,2)
+                    AccelBiasX = [AccelBiasX accel_(i,1)];
+                    AccelBiasY = [AccelBiasY accel_(i,2)];
+                    AccelBiasZ = [AccelBiasZ accel_(i,3) - 9.81]; % Change if data is in ENU format
+                elseif accel_t(i) > static_intvs(cnt,2)
+                    if cnt == size(static_intvs)
+                        break;
+                    else
+                        cnt = cnt + 1;
+                    end
+                end
+            end
+            
+            cnt = 1;
+            for i=1:length(gyro_t)
+                if gyro_t(i) > static_intvs(cnt,1) && gyro_t(i) < static_intvs(cnt,2)
+                    GyroBiasX = [GyroBiasX gyro_(i,1)];
+                    GyroBiasY = [GyroBiasY gyro_(i,2)];
+                    GyroBiasZ = [GyroBiasZ gyro_(i,3)];
+                elseif gyro_t(i) > static_intvs(cnt,2)
+                    if cnt == size(static_intvs)
+                        break;
+                    else
+                        cnt = cnt + 1;
+                    end
+                end
+            end
+            initAccelBias = [mean(AccelBiasX), mean(AccelBiasY), mean(AccelBiasZ)];
+            initGyroBias = [mean(GyroBiasX), mean(GyroBiasY), mean(GyroBiasZ)];
+            
+            disp('Estimated Bias from static intervals')
+            disp(['Accelerometer: ',num2str(initAccelBias)])
+            disp(['Gyroscope: ',num2str(initGyroBias)])
+            
+            obj.proc_data.initBias = struct();
+            obj.proc_data.initBias.accel = initAccelBias;
+            obj.proc_data.initBias.gyro = initGyroBias;
+
+            %% Find best match idx for CAN and Lane
+            obj.proc_data.can = obj.raw_data.can;
+            obj.proc_data.can.state_idxs = [];
+            obj.proc_data.lane = obj.raw_data.lane;
+            obj.proc_data.lane.state_idxs = [];
+            for i=1:length(obj.proc_data.full_t)
+                t = obj.proc_data.full_t(i);
+                [~,idx_can] = min(abs(obj.raw_data.can.t - t));
+                [~,idx_lane] = min(abs(obj.raw_data.lane.t - t));
+
+                obj.proc_data.can.state_idxs = [obj.proc_data.can.state_idxs idx_can];
+                obj.proc_data.lane.state_idxs = [obj.proc_data.lane.state_idxs idx_lane];
+            end
+
+            
+        end
+        
+        %% Visualize Processed data
+        function obj = visualize(obj)
+            t = [];
+            accel = [];
+            gyro = [];
+
+            for i=1:length(obj.data.imu)
+                t = [t obj.data.imu{i}.t];
+                accel = [accel; obj.data.imu{i}.accel];
+                gyro = [gyro; obj.data.imu{i}.gyro];
+            end
+    
+            figure(1); hold on; grid on; axis tight;
+            plot(t',accel(:,1),'r-');
+            plot(t',accel(:,2),'g-');
+            plot(t',accel(:,3),'b-');
+            xlabel('Timestamp'); ylabel('Acceleration (m/s^2)');
+            title('Interpolated Acceleration Data')
+            legend('Ax','Ay','Az')
+
+            figure(2); hold on; grid on; axis tight;
+            plot(t',gyro(:,1),'r-');
+            plot(t',gyro(:,2),'g-');
+            plot(t',gyro(:,3),'b-');
+            xlabel('Timestamp'); ylabel('Gyro (rad/s)');
+            title('Interpolated Gyroscope Data')
+            legend('Wx','Wy','Wz')
+        end
+
+    end
+end

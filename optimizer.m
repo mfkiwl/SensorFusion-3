@@ -1,0 +1,972 @@
+classdef optimizer < handle
+% OPTIMIZER - Sensor Fusion Optimizer Module
+% All input data are from the dataprocessor module
+% [Usage Format]
+% sol = OPTIMIZER(imu,gnss,lane,can,imu_bias,t,prior_covs'basic',options)
+%
+% [imu, gnss, lane, can, imu_bias, t] : Pre-processed data
+% 
+% [Mode] : 'basic', 'partial', 'full', '2-phase'
+% * Basic: INS + GNSS Fusion
+% * Partial: INS + GNSS + WSS Fusion
+% * Full, 2-phase: INS + GNSS + WSS + Lane Detection Fusion (To be done)
+% 
+% [Options] : struct variable containing NLS optimization options
+% * options.CostThres: Cost difference threshold
+% * options.StepThres: Step size threshold
+% * options.IterThres: Iteration limit
+% * options.Algorithm: GN(Gauss-Newton),LM(Levenberg-Marquardt),TR(Trust-Region)
+% ** GN and LM : no guarantee of convergence to local minima
+% 
+% [Methods] : using OPTIMIZER 
+% * optimize() : Find optimized solution to SNLS problem
+% * visualize() : Plot optimization results
+% 
+% Implemented by JinHwan Jeon, 2022
+
+    properties
+        imu
+        gnss
+        lane
+        can
+        imu_bias
+        t
+        covs
+        mode
+        params % vehicle parameters (for partial or above modes)
+        % * L: Relative vector from vehicle rear axle to IMU in (body frame)
+
+        states = {} % state variables saver
+        % * R: Rotation Matrix from vehicle body frame to world frame
+        % * V: Velocity vector in world local frame
+        % * P: Position vector in world local frame
+        % ----- For 'partial' or above modes -----
+        % * wsf: Wheel Scaling Factor(Ratio for considering effective radius)
+
+        bias = {} % bias variables saver
+        bgd_thres = 1e-2; % Gyro bias repropagation threshold
+        bad_thres = 1e-1; % Accel bias repropagation threshold
+        opt = struct() % Optimized results
+    end
+
+    methods
+        %% Constructor
+        function obj = optimizer(varargin)
+            obj.imu = varargin{1};
+            obj.gnss = varargin{2};
+            obj.lane = varargin{3};
+            obj.can = varargin{4};
+            obj.imu_bias = varargin{5};
+            obj.t = varargin{6};
+            obj.covs = varargin{7};
+            obj.mode = varargin{8};            
+            obj.opt.options = varargin{9};
+
+            % Read preview number for full, 2-phase optimization
+            
+            n = length(obj.imu)+1;
+            for i=1:n
+                bias = struct();
+                bias.bg = obj.imu_bias.gyro';
+                bias.ba = obj.imu_bias.accel';
+                bias.bgd = zeros(3,1);
+                bias.bad = zeros(3,1);
+
+                obj.bias = [obj.bias {bias}];
+            end
+            
+            if strcmp(obj.mode,'partial')
+                obj.params =  [1.5; 0; 0.6];  
+            end
+
+            % Perform Pre-integration
+            obj.integrate(1:n-1);
+
+            % Perform INS propagation
+            obj.ins();
+            
+            % Create Initial value for vehicle parameters
+            
+
+            % If mode is full, 2-phase, create initial value for lane
+            % variables
+        end
+        
+        %% Pre-integration using IMU Measurements, given IMU idxs
+        function obj = integrate(obj,idxs)
+            m = length(idxs);
+            nbg_cov = obj.covs.imu.GyroscopeNoise;
+            nba_cov = obj.covs.imu.AccelerometerNoise;
+            n_cov = blkdiag(nbg_cov,nba_cov);
+
+            for i=1:m
+%                 disp(i)
+                % Integrate for each IMU clusters
+                idx = idxs(i);
+                n = size(obj.imu{idx}.accel,1);
+                t_ = obj.imu{idx}.t;
+                a = obj.imu{idx}.accel';
+                w = obj.imu{idx}.gyro';
+                ab = obj.bias{idx}.ba;
+                wb = obj.bias{idx}.bg;
+
+                delRik = eye(3); delVik = zeros(3,1); delPik = zeros(3,1);
+                JdelRik_bg = zeros(3,3);
+                JdelVik_bg = zeros(3,3);
+                JdelVik_ba = zeros(3,3);
+                JdelPik_bg = zeros(3,3);
+                JdelPik_ba = zeros(3,3);
+
+                noise_cov = zeros(9,9);
+                noise_vec = zeros(9,1);
+
+                dtij = 0;
+
+                for k=1:n
+                    dt_k = t_(k+1) - t_(k);
+                    dtij = dtij + dt_k;
+
+%                     n_k = mvnrnd(zeros(6,1),1/dt_k * n_cov)';
+                    a_k = a(:,k) - ab;
+                    w_k = w(:,k) - wb;
+
+                    delRkkp1 = Exp_map(w_k * dt_k);
+                    [Ak, Bk] = getCoeff(delRik,delRkkp1,a_k,w_k,dt_k);
+
+%                     noise_vec = Ak * noise_vec + Bk * n_k;
+                    noise_cov = Ak * noise_cov * Ak' + Bk * (1/dt_k * n_cov) * Bk';
+                    
+                    % IMU measurement propagation
+                    delPik = delPik + delVik * dt_k + 1/2 * delRik * a_k * dt_k^2;
+                    delVik = delVik + delRik * a_k * dt_k;
+                    
+                    % Jacobian Propagation
+                    JdelPik_ba = JdelPik_ba + JdelVik_ba * dt_k - 1/2 * delRik * dt_k^2;
+                    JdelPik_bg = JdelPik_bg + JdelVik_bg * dt_k - 1/2 * delRik * skew(a_k) * JdelRik_bg * dt_k^2;
+                    JdelVik_ba = JdelVik_ba - delRik * dt_k;
+                    JdelVik_bg = JdelVik_bg - delRik * skew(a_k) * JdelRik_bg * dt_k;
+                    JdelRik_bg = delRkkp1' * JdelRik_bg - RightJac(w_k * dt_k) * dt_k;
+                    
+                    delRik = delRik * Exp_map(w_k * dt_k);
+                    
+                end
+
+                obj.imu{idx}.JdelRij_bg = JdelRik_bg;
+                obj.imu{idx}.JdelVij_bg = JdelVik_bg;
+                obj.imu{idx}.JdelVij_ba = JdelVik_ba;
+                obj.imu{idx}.JdelPij_bg = JdelPik_bg;
+                obj.imu{idx}.JdelPij_ba = JdelPik_ba;
+
+                obj.imu{idx}.delRij = delRik;
+                obj.imu{idx}.delVij = delVik;
+                obj.imu{idx}.delPij = delPik;
+                obj.imu{idx}.Covij = noise_cov;
+                obj.imu{idx}.nij = noise_vec;
+
+                lambdas = eig(noise_cov);
+                if ~isempty(find(lambdas <= 0,1))
+                    disp(idx)
+                    disp(lambdas)
+                    error('Computed IMU Covariance is not positive definite')
+                end
+                
+%                 obj.imu{idx}.delRijn = delRik * Exp_map(-noise_vec(1:3));
+%                 obj.imu{idx}.delVijn = delVik - noise_vec(4:6);
+%                 obj.imu{idx}.delPijn = delPik - noise_vec(7:9);
+
+                obj.imu{idx}.dtij = dtij;
+
+            end
+        end
+            
+        %% INS Propagation 
+        function obj = ins(obj)
+        % INS Propagation in the world frame using pre-integrated values
+
+        % * Vehicle Body Frame: [x, y, z] = [Forward, Left, Up]
+        % * World Frame: [x, y, z] = [East, North, Up]
+        % * Camera Frame(Phone): https://source.android.com/docs/core/sensors/sensor-types
+        % Note that IMU (Android) measurements have gravitational effects,
+        % which should be considered when modeling vehicle 3D kinematics 
+
+        % # Vehicle State Variables
+        % # R: Body-to-world frame rotational matrix
+        % # V: World frame velocity vector
+        % # P: World frame position vector (local frame coords, not geodetic)
+            disp('[INS Propagation...]')
+            th = pi/2 - pi/180 * obj.gnss.bearing(1);
+            R = [cos(th) -sin(th) 0;
+                 sin(th) cos(th)  0;
+                 0       0        1];
+            Vned = obj.gnss.vNED(1,:);
+            V = [Vned(2); Vned(1); -Vned(3)];
+            P = lla2enu(obj.gnss.pos(1,:),obj.gnss.lla0,'ellipsoid')';
+            
+            grav = [0;0;-9.81];
+
+            state_ = struct();
+            state_.R = R; state_.V = V; state_.P = P;
+            if strcmp(obj.mode,'partial')
+                state_.WSF = 1;
+            end
+            obj.states = [obj.states {state_}];
+            
+            % For initial state, add bias information
+            state_.bg = obj.bias{1}.bg;
+            state_.bgd = obj.bias{1}.bgd;
+            state_.ba = obj.bias{1}.ba;
+            state_.bad = obj.bias{1}.bad;
+            if strcmp(obj.mode,'partial')
+                state_.L = obj.params;
+            end
+
+            obj.opt.init_state = state_;
+            
+
+            n = length(obj.imu);
+
+            for i=1:n
+                delRij = obj.imu{i}.delRij;
+                delVij = obj.imu{i}.delVij;
+                delPij = obj.imu{i}.delPij;
+                dtij = obj.imu{i}.dtij;
+                
+                P = P + V * dtij + 1/2 * grav * dtij^2 + R * delPij;
+                V = V + grav * dtij + R * delVij;
+                R = R * delRij;
+
+                state_ = struct();
+                state_.R = R; state_.V = V; state_.P = P;
+                
+                if strcmp(obj.mode,'partial')
+                    state_.WSF = 1;
+                end
+
+                obj.states = [obj.states {state_}];
+            end
+
+        end
+
+        %% Optimize
+        function obj = optimize(obj)
+            
+            % Optimize Sparse Nonlinear Least Squares in Batch Manner                     
+
+            disp('[Optimization Starts...]')
+
+            n = length(obj.imu)+1;
+
+            if strcmp(obj.mode,'basic')
+                obj.opt.x0 = zeros(15*n,1);
+            elseif strcmp(obj.mode,'partial')
+                obj.opt.x0 = zeros(16*n+3,1);
+            end
+            
+            % Run optimization depending on algorithm options
+            if strcmp(obj.opt.options.Algorithm,'GN')
+                obj.GaussNewton();
+            elseif strcmp(obj.opt.options.Algorithm,'LM')
+                obj.LevenbergMarquardt();
+            elseif strcmp(obj.opt.options.Algorithm,'TR')
+                obj.TrustRegion();
+            end
+
+            
+        end
+        
+        %% Gauss Newton Method
+        function obj = GaussNewton(obj)
+
+            disp('[SNLS solver: Gauss-Newton Method]')
+            fprintf(' Iteration     f(x)           step\n');
+            formatstr = ' %5.0f   %13.6g  %13.6g ';
+            
+            obj.cost_func(obj.opt.x0);
+            prev_cost = obj.opt.res' * obj.opt.res;
+            str = sprintf(formatstr,0,prev_cost,norm(obj.opt.x0));
+            disp(str)
+
+            i = 1;
+
+            while true
+                A = obj.opt.jac' * obj.opt.jac;
+                b = -obj.opt.jac' * obj.opt.res;
+
+                obj.opt.x0 = A \ b;
+                
+                obj.cost_func(obj.opt.x0);
+
+                cost = obj.opt.res' * obj.opt.res;
+                step_size = norm(obj.opt.x0);
+                
+                str = sprintf(formatstr,i,cost,norm(obj.opt.x0));
+                disp(str)
+                
+                % Ending Criterion
+                obj.opt.flags = [];
+                obj.opt.flags = [obj.opt.flags abs(prev_cost - cost) > obj.opt.options.CostThres];
+                obj.opt.flags = [obj.opt.flags step_size > obj.opt.options.StepThres];
+                obj.opt.flags = [obj.opt.flags i < obj.opt.options.IterThres];
+
+                if length(find(obj.opt.flags)) ~= length(obj.opt.flags) % If any of the criterion is not met, end loop
+                    
+                    obj.retract(obj.opt.x0,'final');
+
+                    disp('[Optimization Finished...]')
+                    idx = find(~obj.opt.flags,1);
+                    
+                    if idx == 1
+                        disp(['Current cost difference ',num2str(abs(prev_cost-cost)),' is below threshold: ',num2str(obj.opt.options.CostThres)])
+                    elseif idx == 2
+                        disp(['Current step size ',num2str(step_size),' is below threshold: ',num2str(obj.opt.options.StepThres)])
+                    elseif idx == 3
+                        disp(['Current iteration number ',num2str(i),' is above threshold: ',num2str(obj.opt.options.IterThres)])
+                    end
+
+                    break;
+                else
+                    i = i + 1;
+                    prev_cost = cost;
+                end
+                
+            end                        
+        end
+
+        %% Levenberg-Marquardt Method: Need to be further implemented
+        function obj = LevenbergMarquardt(obj)
+            disp(['[SNLS solver: ',obj.opt.options.Algorithm,' Method]'])
+            fprintf(' Iteration     f(x)           step           lambda\n');
+            formatstr = ' %5.0f   %13.6g  %13.6g  %5.3g';
+            
+            i = 1;
+            lambda = 10;
+            lambdaUpRate = 11;
+            lambdaDownRate = 9;
+            accept = true;
+            
+            obj.cost_func(obj.opt.x0);
+            prev_cost = obj.opt.res' * obj.opt.res;
+            str = sprintf(formatstr,0,prev_cost,norm(obj.opt.x0));
+            disp(str)
+
+            while true
+                
+                Info = obj.opt.jac' * obj.opt.jac;
+                n = size(Info,1);
+%                 A = Info + lambda * spdiags(diag(Info),0,n,n);
+                A = Info + lambda * speye(n);
+                b = -obj.opt.jac' * obj.opt.res;
+                
+                obj.opt.x0 = A \ b;
+                obj.cost_func(obj.opt.x0);
+                
+                cost = obj.opt.res' * obj.opt.res;
+
+                % Refer to https://people.duke.edu/~hpgavin/ce281/lm.pdf
+                % Need to implement 'backtract' to return to previous
+                % linearization point if not accepted
+                % Also need to implement whether to accept or reject
+                % current step 
+
+                step_size = norm(obj.opt.x0);
+                
+                str = sprintf(formatstr,i,cost,norm(obj.opt.x0),lambda);
+                disp(str)
+                
+                % Ending Criterion
+                obj.opt.flags = [];
+                obj.opt.flags = [obj.opt.flags abs(prev_cost - cost) > obj.opt.options.CostThres];
+                obj.opt.flags = [obj.opt.flags step_size > obj.opt.options.StepThres];
+                obj.opt.flags = [obj.opt.flags i < obj.opt.options.IterThres];
+
+                if length(find(obj.opt.flags)) ~= length(obj.opt.flags) % If any of the criterion is not met, end loop
+                    
+                    obj.retract(obj.opt.x0);
+
+                    disp('[Optimization Finished...]')
+                    idx = find(~obj.opt.flags,1);
+                    
+                    if idx == 1
+                        disp(['Current cost difference ',num2str(abs(prev_cost-cost)),' is below threshold: ',num2str(obj.opt.options.CostThres)])
+                    elseif idx == 2
+                        disp(['Current step size ',num2str(step_size),' is below threshold: ',num2str(obj.opt.options.StepThres)])
+                    elseif idx == 3
+                        disp(['Current iteration number ',num2str(i),' is above threshold: ',num2str(obj.opt.options.IterThres)])
+                    end
+
+                    break;
+                else
+                    i = i + 1;
+                    if prev_cost > cost
+                        prev_cost = cost;
+                        lambda = lambda/lambdaDownRate;
+                        accept = true;
+                    else
+                        lambda = lambda*lambdaUpRate;
+                        accept = false;
+                    end
+                    
+                end
+            end
+
+        end
+
+        %% Trust Region Method
+        function obj = TrustRegion(obj)
+
+        end
+
+        %% Optimization Cost Function
+        function cost_func(obj,x0)
+            obj.retract(x0,'normal');
+            obj.opt.x0 = x0;
+
+            obj.CreatePrBlock();
+            obj.CreateMMBlock();
+            obj.CreateGNSSBlock();
+            obj.CreateWSSBlock();
+
+            obj.opt.res = vertcat(obj.opt.Pr_res,...
+                                  obj.opt.MM_res,....
+                                  obj.opt.GNSS_res,...
+                                  obj.opt.WSS_res);
+            obj.opt.jac = vertcat(obj.opt.Pr_jac,...
+                                  obj.opt.MM_jac,...
+                                  obj.opt.GNSS_jac,...
+                                  obj.opt.WSS_jac);
+        end
+        
+        %% Prior Residual and Jacobian
+        function obj = CreatePrBlock(obj)
+            n = length(obj.states);
+            blk_width = 15*n;
+            blk_height = 15;
+            adder = 0;
+            if strcmp(obj.mode,'partial')
+                blk_width = blk_width + n + 3;
+                adder = n + 3;
+                
+                blk_height = blk_height + n + 3;
+            elseif strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
+                % Add prev_num states
+            end
+
+            Veh_cov = blkdiag(obj.covs.prior.R,obj.covs.prior.V,obj.covs.prior.P);
+            Bias_cov = blkdiag(obj.covs.prior.Bg,obj.covs.prior.Ba);
+            
+            I = zeros(1,9*3 + 6 + adder); J = I; V = I;
+
+            % Vehicle Prior
+            R_init = obj.opt.init_state.R;
+            V_init = obj.opt.init_state.V;
+            P_init = obj.opt.init_state.P;
+            R1 = obj.states{1}.R;
+            V1 = obj.states{1}.V;
+            P1 = obj.states{1}.P;
+            
+            resR = Log_map(R_init' * R1);
+            resV = R_init'* (V1 - V_init);
+            resP = R_init'* (P1 - P_init);
+            
+            Veh_res = InvMahalanobis([resR;resV;resP],Veh_cov);
+
+            [I_1,J_1,V_1] = sparseFormat(1:3,1:3,InvMahalanobis(InvRightJac(resR),obj.covs.prior.R));
+            [I_2,J_2,V_2] = sparseFormat(4:6,4:6,InvMahalanobis(R_init',obj.covs.prior.V));
+            [I_3,J_3,V_3] = sparseFormat(7:9,7:9,InvMahalanobis(R_init'*R1,obj.covs.prior.P));
+            I(1:9*3) = [I_1, I_2, I_3];
+            J(1:9*3) = [J_1, J_2, J_3];
+            V(1:9*3) = [V_1, V_2, V_3];
+
+            % Bias Prior
+            resBg = obj.bias{1}.bg + obj.bias{1}.bgd - obj.opt.init_state.bg - obj.opt.init_state.bgd;
+            resBa = obj.bias{1}.ba + obj.bias{1}.bad - obj.opt.init_state.ba - obj.opt.init_state.bad;
+            
+            Bias_res = InvMahalanobis([resBg;resBa],Bias_cov);
+            V_1b = diag(InvMahalanobis(eye(3),obj.covs.prior.Bg));
+            V_2b = diag(InvMahalanobis(eye(3),obj.covs.prior.Ba));
+
+            I(9*3+1:9*3+6) = 9+1:9+6;
+            J(9*3+1:9*3+6) = 9*n+1:9*n+6;
+            V(9*3+1:9*3+6) = [V_1b V_2b];
+            
+            WSS_res = []; Params_res = [];
+            if strcmp(obj.mode,'partial')
+                % WSF Prior
+                WSS_res = zeros(n,1);
+                for i=1:n
+                    WSF = obj.states{i}.WSF;
+                    WSS_res(i) = InvMahalanobis(WSF - 1,obj.covs.prior.WSF);
+                    I(9*3+6+i) = 15+i;
+                    J(9*3+6+i) = 15*n+i;
+                    V(9*3+6+i) = InvMahalanobis(1,obj.covs.prior.WSF);
+                end
+                
+                % Vehicle Parameters Prior
+                
+                params_ = obj.opt.init_state.L;
+                Params_res = InvMahalanobis(obj.params - params_,obj.covs.prior.Params);
+                I(9*3+6+n+1:9*3+6+n+3) = 15+n+1:15+n+3;
+                J(9*3+6+n+1:9*3+6+n+3) = 16*n+1:16*n+3;
+                V(9*3+6+n+1:9*3+6+n+3) = diag(InvMahalanobis(eye(3),obj.covs.prior.Params));
+            end
+            
+            obj.opt.Pr_res = [Veh_res; Bias_res; WSS_res; Params_res];
+            obj.opt.Pr_jac = sparse(I,J,V,blk_height,blk_width);
+        end
+        
+        %% IMU Residual and Jacobian
+        function obj = CreateMMBlock(obj)
+            n = length(obj.states);
+            blk_width = 15*n;
+%             blk_height = 15 * (n-1);
+            grav = [0;0;-9.81];
+
+            if strcmp(obj.mode,'partial')
+                blk_width = blk_width + n + 3;
+                I_s = zeros(1,2*(n-1)); J_s = I_s; V_s = I_s;
+                s_cov = obj.covs.imu.ScaleFactorNoise;
+                WSF_res = zeros(n-1,1);
+
+            elseif strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
+                % Add prev_num states
+            end
+            
+            I_v = zeros(1,9*24*(n-1)); J_v = I_v; V_v = I_v;
+            I_b = zeros(1,12*(n-1)); J_b = I_b; V_b = I_b;
+            
+            bg_cov = obj.covs.imu.GyroscopeBiasNoise;
+            ba_cov = obj.covs.imu.AccelerometerBiasNoise;
+            
+            Veh_res = zeros(9*(n-1),1);
+            Bias_res = zeros(6*(n-1),1);
+            
+            for i=1:n-1
+                Ri = obj.states{i}.R; Rj = obj.states{i+1}.R;
+                Vi = obj.states{i}.V; Vj = obj.states{i+1}.V;
+                Pi = obj.states{i}.P; Pj = obj.states{i+1}.P;
+                
+                bgi = obj.bias{i}.bg; bgj = obj.bias{i+1}.bg;
+                bai = obj.bias{i}.ba; baj = obj.bias{i+1}.ba;
+                bgdi = obj.bias{i}.bgd; bgdj = obj.bias{i+1}.bgd;
+                badi = obj.bias{i}.bad; badj = obj.bias{i+1}.bad;
+
+                % Use pre-integrated values
+                JdelRij_bg = obj.imu{i}.JdelRij_bg;
+                JdelVij_bg = obj.imu{i}.JdelVij_bg;
+                JdelVij_ba = obj.imu{i}.JdelVij_ba;
+                JdelPij_bg = obj.imu{i}.JdelPij_bg;
+                JdelPij_ba = obj.imu{i}.JdelPij_ba;
+
+                delRij = obj.imu{i}.delRij;
+                delVij = obj.imu{i}.delVij;
+                delPij = obj.imu{i}.delPij;
+                
+                dtij = obj.imu{i}.dtij;
+
+                Covij = obj.imu{i}.Covij;
+                
+                % IMU residual and jacobian
+                resR = Log_map((delRij * Exp_map(JdelRij_bg * bgdi))' * Ri' * Rj);
+                resV = Ri' * (Vj - Vi - grav *dtij) - (delVij + JdelVij_bg * bgdi + JdelVij_ba * badi);
+                resP = Ri' * (Pj - Pi - Vi * dtij - 1/2 * grav * dtij^2) - (delPij + JdelPij_bg * bgdi + JdelPij_ba * badi);
+
+                Veh_res((9*(i-1)+1):9*i) = InvMahalanobis([resR;resV;resP],Covij);
+
+                [Ji,Jj,Jb] = getIMUJac(resR,Ri,Rj,Vi,Vj,Pi,Pj,bgdi,JdelRij_bg,...
+                                       JdelVij_bg,JdelVij_ba,JdelPij_bg,JdelPij_ba,dtij);
+                
+                [I_1,J_1,V_1] = sparseFormat(9*(i-1)+1:9*(i-1)+9,9*(i-1)+1:9*(i-1)+9,InvMahalanobis(Ji,Covij));
+                [I_2,J_2,V_2] = sparseFormat(9*(i-1)+1:9*(i-1)+9,9*i+1:9*i+9,InvMahalanobis(Jj,Covij));
+                [I_3,J_3,V_3] = sparseFormat(9*(i-1)+1:9*(i-1)+9,9*n+6*(i-1)+1:9*n+6*(i-1)+6,InvMahalanobis(Jb,Covij));
+
+                I_v((9*24*(i-1)+1):9*24*i) = [I_1,I_2,I_3];
+                J_v((9*24*(i-1)+1):9*24*i) = [J_1,J_2,J_3];
+                V_v((9*24*(i-1)+1):9*24*i) = [V_1,V_2,V_3];
+                
+                % Bias residual and jacobian
+                resBg = bgj + bgdj - (bgi + bgdi);
+                resBa = baj + badj - (bai + badi);
+
+                Bias_res((6*(i-1)+1):6*i) = InvMahalanobis([resBg;resBa],blkdiag(dtij * bg_cov, dtij * ba_cov));
+
+                I_b1 = 6*(i-1)+1:6*(i-1)+3; J_b1 = 9*n+6*(i-1)+1:9*n+6*(i-1)+3; V_b1 = diag(InvMahalanobis(-eye(3),dtij * bg_cov));
+                I_b2 = 6*(i-1)+1:6*(i-1)+3; J_b2 = 9*n+6*i+1:9*n+6*i+3; V_b2 = diag(InvMahalanobis(eye(3),dtij * bg_cov));
+                I_b3 = 6*(i-1)+4:6*(i-1)+6; J_b3 = 9*n+6*(i-1)+4:9*n+6*(i-1)+6; V_b3 = diag(InvMahalanobis(-eye(3),dtij * ba_cov));
+                I_b4 = 6*(i-1)+4:6*(i-1)+6; J_b4 = 9*n+6*i+4:9*n+6*i+6; V_b4 = diag(InvMahalanobis(eye(3),dtij * ba_cov));
+
+                I_b((12*(i-1)+1):12*i) = [I_b1 I_b2 I_b3 I_b4];
+                J_b((12*(i-1)+1):12*i) = [J_b1 J_b2 J_b3 J_b4];
+                V_b((12*(i-1)+1):12*i) = [V_b1 V_b2 V_b3 V_b4];
+                
+                if strcmp(obj.mode,'partial')
+                    % WSF residual and jacobian
+                    Si = obj.states{i}.WSF; Sj = obj.states{i+1}.WSF;
+                    resS = Sj - Si;
+                    WSF_res(i) = InvMahalanobis(resS,dtij * s_cov);
+                    I_s(2*i-1:2*i) = [i,i];
+                    J_s(2*i-1:2*i) = 15*n+i:15*n+i+1;
+                    V_s(2*i-1:2*i) = InvMahalanobis([-1,1],dtij * s_cov);
+                end
+            end
+            Veh_jac = sparse(I_v,J_v,V_v,9*(n-1),blk_width);
+            Bias_jac = sparse(I_b,J_b,V_b,6*(n-1),blk_width);
+
+            obj.opt.MM_res = [Veh_res;Bias_res];
+            obj.opt.MM_jac = [Veh_jac;Bias_jac];
+            
+            if strcmp(obj.mode,'partial')
+                % Augment WSF residual and jacobian
+                WSF_jac = sparse(I_s,J_s,V_s,n-1,blk_width);
+                
+                obj.opt.MM_res = [obj.opt.MM_res; WSF_res];
+                obj.opt.MM_jac = [obj.opt.MM_jac; WSF_jac];
+            end
+
+        end
+
+        %% GNSS Residual and Jacobian
+        function obj = CreateGNSSBlock(obj)
+            idxs = obj.gnss.state_idxs;
+            n = length(idxs);
+            
+            m = length(obj.states);
+            blk_width = 15*m;
+
+            if strcmp(obj.mode,'partial')
+                blk_width = blk_width + m + 3;
+            elseif strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
+                % Add prev_num states
+            end
+            blk_height = 3*n;
+            gnss_res = zeros(blk_height,1);
+            I_g = zeros(1,3*3*n); J_g = I_g; V_g = I_g;
+
+            for i=1:n
+                idx = idxs(i); % state_idx
+                Ri = obj.states{idx}.R;
+                Pi = obj.states{idx}.P;
+                P_meas = lla2enu(obj.gnss.pos(i,:),obj.gnss.lla0,'ellipsoid')';
+                hAcc = obj.gnss.hAcc(i);
+                vAcc = obj.gnss.vAcc(i);
+                cov = diag([hAcc^2 hAcc^2 vAcc^2]);
+
+                gnss_res((3*(i-1)+1):3*i) = InvMahalanobis(Pi-P_meas,cov);
+                
+                [I_,J_,V_] = sparseFormat((3*(i-1)+1):3*i,9*(idx-1)+7:9*(idx-1)+9,InvMahalanobis(Ri,cov));
+                I_g((9*(i-1)+1):9*i) = I_;
+                J_g((9*(i-1)+1):9*i) = J_;
+                V_g((9*(i-1)+1):9*i) = V_;
+            end
+
+            obj.opt.GNSS_res = gnss_res;
+            obj.opt.GNSS_jac = sparse(I_g,J_g,V_g,blk_height,blk_width);
+        end
+        
+        %% WSS Residual and Jacobian
+        function obj = CreateWSSBlock(obj)
+            if strcmp(obj.mode,'basic')
+                obj.opt.WSS_res = [];
+                obj.opt.WSS_jac = [];
+            else
+                n = length(obj.states);
+                blk_width = 16*n + 3;
+                
+                if strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
+                    % Add prev_num states
+                end
+                
+                L = obj.params;
+    
+                wss_res = zeros(3*(n-2),1);
+                m = 9*4+3;
+                I = zeros(1,m*(n-2)); J = I; V = I; 
+                wss_cov = obj.covs.wss;
+
+                for i=2:n-1
+                    Ri = obj.states{i}.R; Vi = obj.states{i}.V; 
+                    Si = obj.states{i}.WSF;
+                    wi = obj.imu{i}.gyro(1);
+                    
+                    bgi = obj.bias{i}.bg; bgdi = obj.bias{i}.bgd; 
+                    
+                    idx = obj.can.state_idxs(i);
+                    V_meas = [obj.can.whl_spd(idx); 0; 0]; % Vehicle Nonholonomic Constraint
+
+                    res =  1/Si * (Ri' * Vi - skew(wi - bgi - bgdi) * L) - V_meas;
+                    wss_res(3*(i-2)+1:3*(i-2)+3) = InvMahalanobis(res,wss_cov);
+    
+                    [Jrv,Jbg,Js,Jl] = getWSSJac(Ri,Vi,Si,wi,bgi,bgdi,L);
+
+                    [I_rv,J_rv,V_rv] = sparseFormat(3*(i-2)+1:3*(i-2)+3,9*(i-1)+1:9*(i-1)+6,InvMahalanobis(Jrv,wss_cov));
+                    [I_bg,J_bg,V_bg] = sparseFormat(3*(i-2)+1:3*(i-2)+3,9*n+6*(i-1)+1:9*n+6*(i-1)+3,InvMahalanobis(Jbg,wss_cov));
+                    [I_s,J_s,V_s] = sparseFormat(3*(i-2)+1:3*(i-2)+3,15*n+i,InvMahalanobis(Js,wss_cov));
+                    [I_l,J_l,V_l] = sparseFormat(3*(i-2)+1:3*(i-2)+3,16*n+1:16*n+3,InvMahalanobis(Jl,wss_cov));
+                    
+                    I(m*(i-2)+1:m*(i-1)) = [I_rv I_bg I_s I_l];
+                    J(m*(i-2)+1:m*(i-1)) = [J_rv J_bg J_s J_l];
+                    V(m*(i-2)+1:m*(i-1)) = [V_rv V_bg V_s V_l];
+                end
+
+                obj.opt.WSS_res = wss_res;
+                obj.opt.WSS_jac = sparse(I,J,V,3*(n-2),blk_width);
+            end
+        end
+
+        %% Retraction
+        function obj = retract(obj,delta,mode)
+            
+            n = length(obj.states);
+            state_delta = delta(1:9*n);
+            bias_ddelta = delta(9*n+1:15*n); % delta of delta value!
+
+            obj.retractStates(state_delta);
+            obj.retractBias(bias_ddelta,mode);
+            
+            if strcmp(obj.mode,'partial')
+                wsf_delta = delta(15*n+1:16*n);
+                param_delta = delta(16*n+1:16*n+3);
+                obj.retractWSF(wsf_delta);
+                obj.retractParams(param_delta);
+                
+            elseif strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
+                % Need to develop
+                error("To be done")
+            end
+            
+        end
+
+        %% State Retraction
+        function obj = retractStates(obj,state_delta)            
+            n = length(obj.states);
+            for i=1:n
+                deltaR = state_delta(9*(i-1)+1:9*(i-1)+3);
+                deltaV = state_delta(9*(i-1)+4:9*(i-1)+6);
+                deltaP = state_delta(9*(i-1)+7:9*(i-1)+9);  
+
+                R = obj.states{i}.R; V = obj.states{i}.V; P = obj.states{i}.P; 
+                P_ = P + R * deltaP;
+                V_ = V + deltaV;
+                R_ = R * Exp_map(deltaR);
+
+                obj.states{i}.R = R_;
+                obj.states{i}.V = V_;
+                obj.states{i}.P = P_;
+            end            
+        end
+        
+        %% Bias Retraction
+        function obj = retractBias(obj,bias_ddelta,mode)            
+            n = length(obj.bias);
+            idxs = [];
+            for i=1:n                
+                bgd_ = bias_ddelta(6*(i-1)+1:6*(i-1)+3);
+                bad_ = bias_ddelta(6*(i-1)+4:6*(i-1)+6);
+
+                new_bgd = bgd_ + obj.bias{i}.bgd;
+                new_bad = bad_ + obj.bias{i}.bad;
+                
+                % Compare with threshold and update if needed
+                flag = false;
+
+                if strcmp(mode,'final')
+                   bg_ = obj.bias{i}.bg + new_bgd;
+                   bgd_ = zeros(3,1);
+                   ba_ = obj.bias{i}.ba + new_bad;
+                   bad_ = zeros(3,1);
+
+                elseif strcmp(mode,'normal')
+                    if norm(new_bgd) > obj.bgd_thres
+                        bg_ = obj.bias{i}.bg + new_bgd;
+                        bgd_ = zeros(3,1);
+                        flag = true;
+                    else
+                        bg_= obj.bias{i}.bg;
+                        bgd_ = new_bgd;
+                    end
+    
+                    if norm(new_bad) > obj.bad_thres
+                        ba_ = obj.bias{i}.ba + new_bad;
+                        bad_ = zeros(3,1);
+                        flag = true;
+                    else
+                        ba_ = obj.bias{i}.ba;
+                        bad_ = new_bad;
+                    end
+                end
+                
+
+                if flag && i~=n
+                    idxs = [idxs i];
+                end
+                
+                obj.bias{i}.bg = bg_;
+                obj.bias{i}.bgd = bgd_;
+                obj.bias{i}.ba = ba_;
+                obj.bias{i}.bad = bad_;
+            end
+
+            if ~isempty(idxs)
+                % If repropagation is needed                
+                obj.integrate(idxs);
+            end
+        end
+        
+        %% WSF Retraction
+        function obj = retractWSF(obj,wsf_delta)
+            n = length(obj.states);
+            for i=1:n
+                deltaWSF = wsf_delta(i);                
+                WSF = obj.states{i}.WSF;
+
+                WSF_ = WSF + deltaWSF;                
+                obj.states{i}.WSF = WSF_;
+            end            
+        end
+
+        %% Params Retraction
+        function obj = retractParams(obj,param_delta)
+            obj.params = obj.params + param_delta;
+        end
+
+        %% Visualize
+        function visualize(obj)
+            n = length(obj.states);
+            
+            R = []; V = []; P = []; Bg = []; Ba = [];
+            V_b = []; whl_spd = []; S = [];
+
+            for i=1:n
+                R_ = obj.states{i}.R;
+                V_ = obj.states{i}.V;
+                P_ = obj.states{i}.P;
+                
+                R = [R dcm2rpy(R_)];
+                V = [V V_]; P = [P P_];
+                V_b = [V_b R_' * V_];
+                Bg_ = obj.bias{i}.bg;
+                Ba_ = obj.bias{i}.ba;
+                Bg = [Bg Bg_]; Ba = [Ba Ba_];
+
+                can_idx = obj.can.state_idxs(i);
+                whl_spd = [whl_spd obj.can.whl_spd(can_idx)];
+                if strcmp(obj.mode,'partial')
+                    S = [S obj.states{i}.WSF];
+                end
+            end
+            gnss_pos = lla2enu(obj.gnss.pos,obj.gnss.lla0,'ellipsoid');
+
+            figure(1); hold on; grid on; axis equal;
+            plot3(P(1,:),P(2,:),P(3,:),'r.');
+            plot3(gnss_pos(:,1),gnss_pos(:,2),gnss_pos(:,3),'b.');
+            xlabel('Global X'); ylabel('Global Y'); zlabel('Global Z')
+            title('Optimized Trajectory 3D Comparison')
+            legend('Estimated Trajectory','GNSS Measurements')
+            
+            figure(2); 
+            P_lla = enu2lla(P',obj.gnss.lla0,'ellipsoid');
+            geoplot(P_lla(:,1),P_lla(:,2),'r.',obj.gnss.pos(:,1),obj.gnss.pos(:,2),'b.'); grid on;
+            geobasemap satellite
+
+            title('Optimized Trajectory Comparison')
+            legend('Estimated Trajectory','GNSS Measurements')
+
+            figure(3); hold on; grid on;
+            plot(obj.t,V(1,:),'r-');
+            plot(obj.t,V(2,:),'g-');
+            plot(obj.t,V(3,:),'b-');
+            xlabel('Time(s)'); ylabel('V(m/s)')
+            title('Optimized Velocity')
+            legend('Vx','Vy','Vz')
+            
+            figure(4); hold on; grid on;
+            plot(obj.t,V_b(1,:),'r-');
+            plot(obj.t,V_b(2,:),'g-');
+            plot(obj.t,V_b(3,:),'b-');
+            plot(obj.t,whl_spd,'c-');
+            xlabel('Time(s)'); ylabel('V(m/s)')
+            title('Optimized Velocity (Body Frame)')
+            legend('Vx_{b}','Vy_{b}','Vz_{b}','Wheel Speed')
+
+            figure(5); hold on; grid on;
+
+            psi = wrapToPi(deg2rad(90 - obj.gnss.bearing));
+
+            plot(obj.t,R(1,:),'r-');
+            plot(obj.t,R(2,:),'g-');
+            plot(obj.t,R(3,:),'b-');
+            plot(obj.gnss.t-obj.gnss.t(1),psi,'c.')
+            xlabel('Time(s)'); ylabel('Angle(rad)')
+            title('Optimized RPY Angle Comparison')
+            legend('Roll','Pitch','Yaw','GNSS Yaw')
+            
+            figure(6); hold on; grid on;
+            plot(obj.t,Bg(1,:),'r-');
+            plot(obj.t,Bg(2,:),'g-');
+            plot(obj.t,Bg(3,:),'b-');
+            xlabel('Time(s)'); ylabel('Gyro Bias(rad/s)')
+            title('Optimized Gyro Bias Comparison')
+            legend('wbx','wby','wbz')
+
+            figure(7); hold on; grid on;
+            plot(obj.t,Ba(1,:),'r-');
+            plot(obj.t,Ba(2,:),'g-');
+            plot(obj.t,Ba(3,:),'b-');
+            xlabel('Time(s)'); ylabel('Accel Bias(m/s^2)')
+            title('Optimized Accel Bias Comparison')
+            legend('abx','aby','abz')
+
+            if strcmp(obj.mode,'partial')
+                figure(8); 
+                plot(obj.t,S); grid on;
+                xlabel('Time(s)'); ylabel('Wheel Speed Scaling Factor')
+                title('Optimized Wheel Speed Scaling Factor')
+            end
+        end
+
+    end
+end
+
+function [Ak, Bk] = getCoeff(delRik, delRkkp1, a_k, w_k, dt_k)
+    Ak = zeros(9,9); Bk = zeros(9,6);
+    Ak(1:3,1:3) = delRkkp1';
+    Ak(4:6,1:3) = -delRik * skew(a_k) * dt_k;
+    Ak(4:6,4:6) = eye(3);
+    Ak(7:9,1:3) = -1/2 * delRik * skew(a_k) * dt_k^2;
+    Ak(7:9,4:6) = eye(3) * dt_k;
+    Ak(7:9,7:9) = eye(3);
+
+    Bk(1:3,1:3) = RightJac(w_k * dt_k) * dt_k;
+    Bk(4:6,4:6) = delRik * dt_k;
+    Bk(7:9,4:6) = 1/2 * delRik * dt_k^2;
+end
+
+function [Ji,Jj,Jb] = getIMUJac(resR,Ri,Rj,Vi,Vj,Pi,Pj,bgdi,JdelRij_bg,JdelVij_bg,JdelVij_ba,JdelPij_bg,JdelPij_ba,dtij)
+    grav = [0;0;-9.81];
+    Ji = zeros(9,9); Jj = zeros(9,9); Jb = zeros(9,6);
+    Ji(1:3,1:3) = -InvRightJac(resR) * Rj' * Ri;
+    Ji(4:6,1:3) = skew(Ri' * (Vj - Vi - grav * dtij));
+    Ji(4:6,4:6) = -Ri';
+    Ji(7:9,1:3) = skew(Ri' * (Pj - Pi - Vi * dtij - 1/2 * grav * dtij^2));
+    Ji(7:9,4:6) = -Ri' * dtij;
+    Ji(7:9,7:9) = -eye(3);
+
+    Jj(1:3,1:3) = InvRightJac(resR);
+    Jj(4:6,4:6) = Ri';
+    Jj(7:9,7:9) = Ri' * Rj;
+
+    Jb(1:3,1:3) = -InvRightJac(resR) * Exp_map(resR)' * RightJac(JdelRij_bg * bgdi) * JdelRij_bg;
+    Jb(4:6,1:3) = -JdelVij_bg;
+    Jb(4:6,4:6) = -JdelVij_ba;
+    Jb(7:9,1:3) = -JdelPij_bg;
+    Jb(7:9,4:6) = -JdelPij_ba;
+end
+
+function [Jrv,Jbg,Js,Jl] = getWSSJac(Ri,Vi,Si,wi,bgi,bgdi,L)
+    Jrv = zeros(3,6); % Horizontally Augmented for R and V
+    Jrv(:,1:3) = 1/Si * skew(Ri' * Vi);
+    Jrv(:,4:6) = 1/Si * Ri';
+
+    Jbg = -1/Si * skew(L);
+    Js = -1/Si^2 * (Ri' * Vi - skew(wi - bgi - bgdi) * L);
+    Jl = -1/Si * skew(wi - bgi - bgdi);
+end
