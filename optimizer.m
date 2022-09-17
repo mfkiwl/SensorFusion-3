@@ -260,7 +260,7 @@ classdef optimizer < handle
             if strcmp(obj.mode,'basic')
                 obj.opt.x0 = zeros(15*n,1);
             elseif strcmp(obj.mode,'partial')
-                obj.opt.x0 = zeros(16*n+1,1);
+                obj.opt.x0 = zeros(16*n,1);
             end
             
             % Run optimization depending on algorithm options
