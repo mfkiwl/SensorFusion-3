@@ -8,7 +8,8 @@ Implemented by JinHwan Jeon, 2022
 """
 # Load Data (.pkl files)
 # path = 'D:/SJ_Dataset/2022-08-05/2022-08-05--02-28-29/'
-path = 'D:/SJ_Dataset/20220805_022829/'
+# path = 'D:/SJ_Dataset/20220805_022829/'
+path = 'D:/SJ_Dataset/MatlabFiles/data/'
 # path = ''
 dataset = DataLoader(path)
 dataset.load()

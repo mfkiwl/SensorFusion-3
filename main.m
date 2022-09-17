@@ -46,17 +46,23 @@ options = struct();
 options.CostThres = 1e-6;
 options.StepThres = 1e-6;
 options.IterThres = 100;
-options.Algorithm = 'TR';
-% GN : Gauss-Newton (May be fast, but no guarantee of stable convergence)
-% LM : Levenberg-Marquardt(To Be Done)
-% TR : Trust-Region (Recommended for stable convergence)
+options.Algorithm = 'GN';
+% GN : Gauss-Newton (Recommended for fast convergence, may not be stable for severely non-linear cases)
+% LM : Levenberg-Marquardt(Not recommended for batch-wise optimization: wrong convergence)
+% TR : Trust-Region (Recommended for stable convergence, but typically much slower than G-N method)
+
+% If selected algorithm is LM, need to define parameters additionally
+% options.LM = struct();
+% options.LM.eta = 0.1;
+% options.LM.Lu = 11; % Lambda Up multiplier
+% options.LM.Ld = 5; % Lambda Decrease divider
 
 % If selected algorithm is TR, need to define parameters additionally
-options.TR = struct();
-options.TR.eta1 = 0.6;
-options.TR.eta2 = 0.9;
-options.TR.gamma1 = 0.1;
-options.TR.gamma2 = 2;
+% options.TR = struct();
+% options.TR.eta1 = 0.6;
+% options.TR.eta2 = 0.9;
+% options.TR.gamma1 = 0.1;
+% options.TR.gamma2 = 2;
 
 
 %% INS + GNSS Fusion 

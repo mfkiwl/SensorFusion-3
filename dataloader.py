@@ -27,7 +27,8 @@ class DataLoader:
                       'gpsLocationExternal.pkl',
                       'liveLocationKalman.pkl',
                       'modelV2.pkl',
-                      'sensorEvents.pkl']
+                      'sensorEvents.pkl',
+                      'snapRaw.pkl']
 
         self.raw_data = {} # Dictionary to save loaded data files (Raw)
         self.data = {} # Semi-processed Data
@@ -63,7 +64,6 @@ class DataLoader:
         # Read GNSS data
 
         DOI = self.raw_data['gpsLocationExternal']
-        print(DOI.keys())
         DOI['idx'] = list(range(len(DOI.index)))
 
         # DOI = DOI.loc[DOI['accuracy'] < 5] # Discard data with horizontal accuracy higher than 5m 
@@ -135,26 +135,26 @@ class DataLoader:
 
             cnt += 1
 
-        ax = []; ay = []; az = []; wx = []; wy = []; wz = []; t = []
-        for acc in self.data['imu']['accel']['meas']:
-            ax.append(acc[0])
-            ay.append(acc[1])
-            az.append(acc[2])
-        for gyro in self.data['imu']['gyro']['meas']:
-            wx.append(gyro[0])
-            wy.append(gyro[1])
-            wz.append(gyro[2])
+        # ax = []; ay = []; az = []; wx = []; wy = []; wz = []; t = []
+        # for acc in self.data['imu']['accel']['meas']:
+        #     ax.append(acc[0])
+        #     ay.append(acc[1])
+        #     az.append(acc[2])
+        # for gyro in self.data['imu']['gyro']['meas']:
+        #     wx.append(gyro[0])
+        #     wy.append(gyro[1])
+        #     wz.append(gyro[2])
 
-        plt.figure(1)
-        plt.plot(ax,'r')
-        plt.plot(ay,'g')
-        plt.plot(az,'b')
-        plt.figure(2)
-        plt.plot(wx,'r')
-        plt.plot(wy,'g')
-        plt.plot(wz,'b')
+        # plt.figure(1)
+        # plt.plot(ax,'r')
+        # plt.plot(ay,'g')
+        # plt.plot(az,'b')
+        # plt.figure(2)
+        # plt.plot(wx,'r')
+        # plt.plot(wy,'g')
+        # plt.plot(wz,'b')
 
-        plt.show()
+        # plt.show()
 
         """
         * Read lane measurements
@@ -285,6 +285,16 @@ class DataLoader:
 
             self.data['lane']['prob'].append([val for val in prob[i]])
 
+        DOI = self.raw_data['snapRaw']
+        t = DOI['timestamp_snap']
+        lat = DOI['latitude_snap']
+        lon = DOI['longitude_snap']
+
+        self.data['snap'] = {}
+        self.data['snap']['t'] = t
+        self.data['snap']['lat'] = lat
+        self.data['snap']['lon'] = lon
+
     def save2mat(self):
         """
         Save Dictonaries into .mat files
@@ -295,6 +305,7 @@ class DataLoader:
         sio.savemat(self.FOI+'lane.mat',self.data['lane'])
         sio.savemat(self.FOI+'can.mat',self.data['can'])
         sio.savemat(self.FOI+'imu.mat',self.data['imu'])
+        sio.savemat(self.FOI+'snap.mat',self.data['snap'])
         
 def findIntvs(idxs,t):
     n = len(idxs)

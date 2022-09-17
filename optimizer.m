@@ -17,6 +17,9 @@ classdef optimizer < handle
 % * options.IterThres: Iteration limit
 % * options.Algorithm: GN(Gauss-Newton),LM(Levenberg-Marquardt),TR(Trust-Region)
 % ** GN and LM : no guarantee of convergence to local minima
+% Recommended to use GN or TR 
+% When using TR as solver algorithm, need to define parameters
+% TR parameters at 'main.m' should work fine
 % 
 % [Methods] : using OPTIMIZER 
 % * optimize() : Find optimized solution to SNLS problem
@@ -85,9 +88,6 @@ classdef optimizer < handle
 
             % Perform INS propagation
             obj.ins();
-            
-            
-            
 
             % If mode is full, 2-phase, create initial value for lane
             % variables
@@ -275,8 +275,13 @@ classdef optimizer < handle
             
         end
         
-        %% Gauss Newton Method
+        %% Gauss-Newton Method
         function obj = GaussNewton(obj)
+            % Gauss-Newton method shows very fast convergence compared to 
+            % Trust-Region method, but suffers from low convergence stability
+            % near the local minima (oscillation frequently observed)
+            % Oscillation detection was implemented to reduce meaningless
+            % iterations. 
 
             disp('[SNLS solver: Gauss-Newton Method]')
             fprintf(' Iteration     f(x)           step\n');
@@ -288,6 +293,8 @@ classdef optimizer < handle
             disp(str)
 
             i = 1;
+            
+            cost_stack = prev_cost; % Stack costs for oscillation detection
 
             while true
                 A = jac' * jac;
@@ -298,6 +305,7 @@ classdef optimizer < handle
                 [res,jac] = obj.cost_func(x0);
 
                 cost = res' * res;
+                cost_stack = [cost_stack cost];
                 step_size = norm(x0);
                 
                 str = sprintf(formatstr,i,cost,step_size);
@@ -308,6 +316,13 @@ classdef optimizer < handle
                 obj.opt.flags = [obj.opt.flags abs(prev_cost - cost) > obj.opt.options.CostThres];
                 obj.opt.flags = [obj.opt.flags step_size > obj.opt.options.StepThres];
                 obj.opt.flags = [obj.opt.flags i < obj.opt.options.IterThres];
+                
+                % Check for oscillation around the local minima
+                if length(cost_stack) >= 5
+                    osc_flag = DetectOsc(cost_stack);
+                else
+                    osc_flag = false;
+                end
 
                 if length(find(obj.opt.flags)) ~= length(obj.opt.flags) % If any of the criterion is not met, end loop
                     
@@ -325,6 +340,12 @@ classdef optimizer < handle
                     end
 
                     break;
+                elseif osc_flag
+                    obj.retract(x0,'final');
+
+                    disp('[Optimization Finished...]')
+                    disp('Oscillation about the local minima detected')
+                    break;
                 else
                     i = i + 1;
                     prev_cost = cost;
@@ -333,80 +354,100 @@ classdef optimizer < handle
             end                        
         end
 
-        %% Levenberg-Marquardt Method: Need to be further implemented
+        %% Levenberg-Marquardt Method
         function obj = LevenbergMarquardt(obj)
-            disp(['[SNLS solver: ',obj.opt.options.Algorithm,' Method]'])
-            fprintf(' Iteration     f(x)           step           lambda\n');
-            formatstr = ' %5.0f   %13.6g  %13.6g  %5.3g';
-            
-            i = 1;
-            lambda = 10;
-            lambdaUpRate = 11;
-            lambdaDownRate = 9;
-            accept = true;
-            
-            obj.cost_func(obj.opt.x0);
-            prev_cost = obj.opt.res' * obj.opt.res;
-            str = sprintf(formatstr,0,prev_cost,norm(obj.opt.x0));
+            % Levenberg-Marquardt algorithm
+            % Implemented "The Levenberg-Marquardt algorithm for nonlinear least squares curve-fitting problems"
+            % by Henri P. Gavin
+            % 
+            % Implemented in MATLAB by JinHwan Jeon, 2022
+            %
+            % Original paper provides 3 possible update methods for L-M 
+            % parameter but only the first update method is implemented
+
+            disp('[SNLS solver: Approximate Trust Region Method]')
+            fprintf(' Iteration      f(x)        step        Lambda    Acceptance\n');
+            formatstr = ' %5.0f        %-10.3g   %-10.3g   %-10.3g    %s';
+            x0 = obj.opt.x0;
+            lambda = 10; % Initial Trust Region radius
+            [res,jac] = obj.cost_func(x0);
+            prev_cost = res' * res;
+            str = sprintf(formatstr,0,prev_cost,norm(x0),lambda,'Init');
             disp(str)
 
+            i = 1;
+
+            eta = obj.opt.options.LM.eta;
+            Lu = obj.opt.options.LM.Lu;
+            Ld = obj.opt.options.LM.Ld;
+            
             while true
+                A_info = jac' * jac; b = -jac' * res; 
+                n = size(A_info,1);
+                A_added = lambda * spdiags(diag(A_info),0,n,n);
+                A = A_info + A_added;
+                x0 = A \ b; % Gauss-Newton Step
                 
-                Info = obj.opt.jac' * obj.opt.jac;
-                n = size(Info,1);
-%                 A = Info + lambda * spdiags(diag(Info),0,n,n);
-                A = Info + lambda * speye(n);
-                b = -obj.opt.jac' * obj.opt.res;
-                
-                obj.opt.x0 = A \ b;
-                obj.cost_func(obj.opt.x0);
-                
-                cost = obj.opt.res' * obj.opt.res;
+                dummy_states = obj.states; % need to check if change in dummy state changes obj.states
+                dummy_bias = obj.bias;
+                dummy_imu = obj.imu;
 
-                % Refer to https://people.duke.edu/~hpgavin/ce281/lm.pdf
-                % Need to implement 'backtract' to return to previous
-                % linearization point if not accepted
-                % Also need to implement whether to accept or reject
-                % current step 
+                [res_,jac_] = obj.cost_func(x0);
+                cost = res_' * res_;
 
-                step_size = norm(obj.opt.x0);
+                ared = prev_cost - cost;
+                pred = x0' * (A_added * x0 + b);
+                rho = ared/pred; 
                 
-                str = sprintf(formatstr,i,cost,norm(obj.opt.x0),lambda);
+                if rho >= eta
+                    % Current Step Accepted, update loop variables
+                    res = res_;
+                    jac = jac_;
+                    prev_cost = cost;
+                    string = 'Accepted';
+                    flag = true;
+                else
+                    % Current Step Rejected, recover states, bias, 
+                    % imu(preintegrated terms) using dummy variables
+                    obj.states = dummy_states;
+                    obj.bias = dummy_bias;
+                    obj.imu = dummy_imu;
+                    string = 'Rejected';
+                    flag = false;                    
+                end
+                
+                step_size = norm(x0);
+                
+                str = sprintf(formatstr,i,cost,step_size,lambda,string);
                 disp(str)
                 
-                % Ending Criterion
-                obj.opt.flags = [];
-                obj.opt.flags = [obj.opt.flags abs(prev_cost - cost) > obj.opt.options.CostThres];
-                obj.opt.flags = [obj.opt.flags step_size > obj.opt.options.StepThres];
-                obj.opt.flags = [obj.opt.flags i < obj.opt.options.IterThres];
-
-                if length(find(obj.opt.flags)) ~= length(obj.opt.flags) % If any of the criterion is not met, end loop
-                    
-                    obj.retract(obj.opt.x0);
-
-                    disp('[Optimization Finished...]')
-                    idx = find(~obj.opt.flags,1);
-                    
-                    if idx == 1
-                        disp(['Current cost difference ',num2str(abs(prev_cost-cost)),' is below threshold: ',num2str(obj.opt.options.CostThres)])
-                    elseif idx == 2
-                        disp(['Current step size ',num2str(step_size),' is below threshold: ',num2str(obj.opt.options.StepThres)])
-                    elseif idx == 3
-                        disp(['Current iteration number ',num2str(i),' is above threshold: ',num2str(obj.opt.options.IterThres)])
+                lambda = UpdateLambda(lambda,Lu,Ld,flag);
+                
+                if flag % Check Ending Criterion for Accepted Steps
+                    obj.opt.flags = [];
+                    obj.opt.flags = [obj.opt.flags abs(ared) > obj.opt.options.CostThres];
+                    obj.opt.flags = [obj.opt.flags step_size > obj.opt.options.StepThres];
+                    obj.opt.flags = [obj.opt.flags i < obj.opt.options.IterThres];
+    
+                    if length(find(obj.opt.flags)) ~= length(obj.opt.flags) % If any of the criterion is not met, end loop
+                        
+                        obj.retract(x0,'final');
+    
+                        disp('[Optimization Finished...]')
+                        idx = find(~obj.opt.flags,1);
+                        
+                        if idx == 1
+                            disp(['Current cost difference ',num2str(abs(ared)),' is below threshold: ',num2str(obj.opt.options.CostThres)])
+                        elseif idx == 2
+                            disp(['Current step size ',num2str(step_size),' is below threshold: ',num2str(obj.opt.options.StepThres)])
+                        elseif idx == 3
+                            disp(['Current iteration number ',num2str(i),' is above threshold: ',num2str(obj.opt.options.IterThres)])
+                        end
+    
+                        break;
                     end
 
-                    break;
-                else
                     i = i + 1;
-                    if prev_cost > cost
-                        prev_cost = cost;
-                        lambda = lambda/lambdaDownRate;
-                        accept = true;
-                    else
-                        lambda = lambda*lambdaUpRate;
-                        accept = false;
-                    end
-                    
                 end
             end
 
@@ -1061,11 +1102,34 @@ function h_dl = ComputeDogLeg(h_gn,h_gd,tr_rad)
 end
 
 function Delta = UpdateDelta(rho,tr_rad,eta1,eta2,gamma1,gamma2)
+% Update trust-region radius according to gain ratio value (rho)
     if rho >= eta2
         Delta = gamma2 * tr_rad;
     elseif rho < eta1
         Delta = gamma1 * tr_rad;
     else
         Delta = tr_rad;
+    end
+end
+
+function Lambda = UpdateLambda(lambda,Lu,Ld,flag)
+% Update Levenberg-Marquardt lambda value according to gain ration value
+    if flag
+        Lambda = max([lambda/Ld,1e-7]);
+    else
+        Lambda = min([lambda*Lu,1e7]);
+    end
+end
+
+function osc_flag = DetectOsc(cost_stack)
+% Detect oscillation by computing maximum deviation from average (recent 5 costs)
+    last_five = cost_stack(end-4:end);
+    avg = mean(last_five);
+    delta = last_five - avg;
+    % If all recent costs are near the average, detect oscillation
+    if max(delta) < 1e2
+        osc_flag = true;
+    else
+        osc_flag = false;
     end
 end
