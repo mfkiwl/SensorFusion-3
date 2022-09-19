@@ -12,12 +12,13 @@ classdef dataprocessor < handle
             gnss.raw_idx = gnss.raw_idx + 1;
             can = varargin{3};
             lane = varargin{4};
-            
+            snap = varargin{5};
+
             obj.raw_data.imu = imu;
             obj.raw_data.gnss = gnss;
             obj.raw_data.can = can;
             obj.raw_data.lane = lane;
-
+            obj.raw_data.snap = snap;
         end
 
         %% Process data
@@ -304,7 +305,16 @@ classdef dataprocessor < handle
                 obj.proc_data.lane.state_idxs = [obj.proc_data.lane.state_idxs idx_lane];
             end
 
+            %% Process SNAP raw data
+            % Perform mid-point integration to find timestamps for Nan
+            % values
+
+            snap_t0 = obj.raw_data.snap.t(1);
+            [~,idx] = min(abs(obj.raw_data.can.t - snap_t0));
             
+
+
+
         end
         
         %% Visualize Processed data

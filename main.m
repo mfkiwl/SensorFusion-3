@@ -4,9 +4,10 @@ imu = load('imu.mat');
 gnss = load('gnss.mat');
 lane = load('lane.mat');
 can = load('can.mat');
+snap = load('snap_raw.mat');
 
 %% Pre Process raw data
-dataset = dataprocessor(imu,gnss,can,lane);
+dataset = dataprocessor(imu,gnss,can,lane,snap);
 dataset.process();
 % dataset.visualize();
 
@@ -73,6 +74,7 @@ options.Algorithm = 'GN';
 
 %% INS + GNSS + WSS Fusion
 sol = struct();
-sol.partial = optimizer(imu_,gnss_,lane_,can_,bias_,t_,covs_,'partial',options);
+sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
 sol.partial.optimize();
+%%
 sol.partial.visualize();

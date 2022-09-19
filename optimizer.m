@@ -32,6 +32,7 @@ classdef optimizer < handle
         gnss
         lane
         can
+        snap
         imu_bias
         t
         covs
@@ -59,11 +60,12 @@ classdef optimizer < handle
             obj.gnss = varargin{2};
             obj.lane = varargin{3};
             obj.can = varargin{4};
-            obj.imu_bias = varargin{5};
-            obj.t = varargin{6};
-            obj.covs = varargin{7};
-            obj.mode = varargin{8};            
-            obj.opt.options = varargin{9};
+            obj.snap = varargin{5};
+            obj.imu_bias = varargin{6};
+            obj.t = varargin{7};
+            obj.covs = varargin{8};
+            obj.mode = varargin{9};            
+            obj.opt.options = varargin{10};
 
             % Read preview number for full, 2-phase optimization
             
@@ -967,6 +969,7 @@ classdef optimizer < handle
                 end
             end
             gnss_pos = lla2enu(obj.gnss.pos,obj.gnss.lla0,'ellipsoid');
+            
 
             figure(1); hold on; grid on; axis equal;
             plot3(P(1,:),P(2,:),P(3,:),'r.');
@@ -976,12 +979,17 @@ classdef optimizer < handle
             legend('Estimated Trajectory','GNSS Measurements')
             
             figure(2); 
+%             snap_lla = [obj.snap.lat, obj.snap.lon, zeros(size(obj.snap.lat,1),1)];
             P_lla = enu2lla(P',obj.gnss.lla0,'ellipsoid');
-            geoplot(P_lla(:,1),P_lla(:,2),'r.',obj.gnss.pos(:,1),obj.gnss.pos(:,2),'b.'); grid on;
+            
+            geoplot(P_lla(:,1),P_lla(:,2),'r.',...
+                    obj.gnss.pos(:,1),obj.gnss.pos(:,2),'b.'); grid on; hold on;
+            geoplot(obj.snap.lat,obj.snap.lon,'y.','MarkerSize',8)
+
             geobasemap satellite
 
             title('Optimized Trajectory Comparison')
-            legend('Estimated Trajectory','GNSS Measurements')
+            legend('Estimated Trajectory','GNSS Measurements','Road Snap')
 
             figure(3); hold on; grid on;
             plot(obj.t,V(1,:),'r-');
