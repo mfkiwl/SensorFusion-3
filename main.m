@@ -11,6 +11,7 @@ dataset = dataprocessor(imu,gnss,can,lane,snap);
 dataset.process();
 % dataset.visualize();
 
+%%
 imu_ = dataset.proc_data.imu;
 gnss_ = dataset.proc_data.gnss;
 lane_ = dataset.proc_data.lane;
@@ -65,7 +66,7 @@ options.Algorithm = 'GN';
 % options.TR.gamma1 = 0.1;
 % options.TR.gamma2 = 2;
 
-
+lane_.prev_num = 6; % Set preview number
 %% INS + GNSS Fusion 
 % sol = struct();
 % sol.basic = optimizer(imu_,gnss_,lane_,can_,bias_,t_,covs_,'basic',options);
@@ -78,3 +79,16 @@ sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',opti
 sol.partial.optimize();
 %%
 sol.partial.visualize();
+
+%% INS + GNSS + WSS + Lane Fusion
+
+% sol = struct();
+% sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'2-phase',options);
+% % sol.partial.optimize();
+% sol.partial.visualize();
+
+%% Test getSphereRad
+Points = [0, 0, 2, 2;
+          0, 2, 0, 2;
+          0, 0, 0, 1];
+R = getSphereRad(Points);

@@ -309,12 +309,61 @@ classdef dataprocessor < handle
             % Perform mid-point integration to find timestamps for Nan
             % values
 
-            snap_t0 = obj.raw_data.snap.t(1);
-            [~,idx] = min(abs(obj.raw_data.can.t - snap_t0));
+%             snap_t0 = obj.raw_data.snap.t(1);
+%             [~,idx] = min(abs(obj.raw_data.can.t - snap_t0));
+%             
+%             vel = obj.raw_data.can.whl_spd;
+%             t = obj.raw_data.can.t;
+%             dist = 0;
+%             
+%             for i=idx:length(vel)-1
+%                 dt = t(i+1) - t(i);
+%                 avg_vel = 1/2 * (vel(i)+vel(i+1));
+%                 dist = [dist dist(end) + avg_vel * dt];
+%             end
+%             obj.raw_data.snap.can_dist = dist;
+% 
+%             can_idxs = [];
+%             est_t = [];
+% 
+%             for i=1:20
+%                 L = obj.raw_data.snap.dist(i);
+%                 [~,idx_] = min(abs(obj.raw_data.snap.can_dist - L));
+%                 can_idxs = [can_idxs idx_];
+%                 est_t = [est_t obj.raw_data.can.t(idx_ + idx - 1)];
+%             end
+% 
+%             
+%             obj.raw_data.snap.can_idxs = can_idxs;
+%             
+%             obj.raw_data.snap.est_t = est_t - snap_t0;
+%             obj.raw_data.snap.ref_t = obj.raw_data.snap.t - snap_t0;
+
             
+            %% Mark unstable lane data (lane change, etc)
+            % Unstable lane data will not be used for optimization
+            % No lane related states for that timestep
+%             n = length(obj.proc_data.lane.state_idxs);
+%             valid = [];
+%             for i=1:n
+%                 idx = obj.proc_data.lane.state_idxs(i);
+%                 validity = obj.proc_data.lane.prob(idx);
+%                 if validity < 0.8
+%                     valid = [valid false];
+%                 else
+%                     valid = [valid true];
+%                 end
+%             end
 
+            can_lane_idxs = [];
 
-
+            for i=1:length(obj.raw_data.lane.t)
+                lane_t = obj.raw_data.lane.t(i);
+                [~,idx] = min(abs(lane_t - obj.raw_data.can.t));
+                can_lane_idxs = [can_lane_idxs idx];
+            end
+            obj.raw_data.can.can_lane_idxs = can_lane_idxs;
+            
         end
         
         %% Visualize Processed data

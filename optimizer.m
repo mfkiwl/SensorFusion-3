@@ -209,9 +209,20 @@ classdef optimizer < handle
 
             state_ = struct();
             state_.R = R; state_.V = V; state_.P = P;
-            if strcmp(obj.mode,'partial')
+            if ~strcmp(obj.mode,'basic')
                 state_.WSF = 1;
             end
+            lane_idx = obj.lane.state_idxs(1);
+            prev_num = obj.lane.prev_num;
+
+            state_.left = [0:10:10*(prev_num-1);
+                           obj.lane.ly(lane_idx,1:prev_num);
+                           obj.lane.lz(lane_idx,1:prev_num)];
+
+            state_.right = [0:10:10*(prev_num-1);
+                            obj.lane.ry(lane_idx,1:prev_num);
+                            obj.lane.rz(lane_idx,1:prev_num)];
+
             obj.states = [obj.states {state_}];
             
             % For initial state, add bias information
@@ -241,9 +252,17 @@ classdef optimizer < handle
                 state_ = struct();
                 state_.R = R; state_.V = V; state_.P = P;
                 
-                if strcmp(obj.mode,'partial')
-                    state_.WSF = 1;
+                if ~strcmp(obj.mode,'basic')
+                    state_.WSF = 1;                    
                 end
+                lane_idx = obj.lane.state_idxs(i+1);    
+                state_.left = [0:10:10*(prev_num-1);
+                               obj.lane.ly(lane_idx,1:prev_num);
+                               obj.lane.lz(lane_idx,1:prev_num)];
+
+                state_.right = [0:10:10*(prev_num-1);
+                                obj.lane.ry(lane_idx,1:prev_num);
+                                obj.lane.rz(lane_idx,1:prev_num)];
 
                 obj.states = [obj.states {state_}];
             end
@@ -949,11 +968,26 @@ classdef optimizer < handle
             
             R = []; V = []; P = []; Bg = []; Ba = [];
             V_b = []; whl_spd = []; S = [];
+            left = {}; right = {};
 
             for i=1:n
                 R_ = obj.states{i}.R;
                 V_ = obj.states{i}.V;
                 P_ = obj.states{i}.P;
+                
+                Left_ = []; Right_ = [];
+                % Transform lane points to world frame
+                for j=1:obj.lane.prev_num
+                    left_ = obj.states{i}.left(:,j);
+                    right_ = obj.states{i}.right(:,j);
+
+                    Left_ = [Left_ P_ + R_ * left_];
+                    Right_ = [Right_ P_ + R_ * right_];
+
+                    
+                end
+                left = [left {Left_}];
+                right = [right {Right_}];
                 
                 R = [R dcm2rpy(R_)];
                 V = [V V_]; P = [P P_];
@@ -964,7 +998,7 @@ classdef optimizer < handle
 
                 can_idx = obj.can.state_idxs(i);
                 whl_spd = [whl_spd obj.can.whl_spd(can_idx)];
-                if strcmp(obj.mode,'partial')
+                if ~strcmp(obj.mode,'basic')
                     S = [S obj.states{i}.WSF];
                 end
             end
@@ -972,11 +1006,26 @@ classdef optimizer < handle
             
 
             figure(1); hold on; grid on; axis equal;
-            plot3(P(1,:),P(2,:),P(3,:),'r.');
-            plot3(gnss_pos(:,1),gnss_pos(:,2),gnss_pos(:,3),'b.');
-            xlabel('Global X'); ylabel('Global Y'); zlabel('Global Z')
+%             p_est = plot3(P(1,:),P(2,:),P(3,:),'r.');
+%             p_gnss = plot3(gnss_pos(:,1),gnss_pos(:,2),gnss_pos(:,3),'b.');
+%             
+%             for i=1:n
+%                 left_ = left{i}; right_ = right{i};
+%                 plot3(left_(1,:),left_(2,:),left_(3,:));
+%                 plot3(right_(1,:),right_(2,:),right_(3,:));
+%             end
+            p_est = plot(P(1,:),P(2,:),'r.');
+            p_gnss = plot(gnss_pos(:,1),gnss_pos(:,2),'b.');
+            
+            for i=1:n
+                left_ = left{i}; right_ = right{i};
+                plot(left_(1,:),left_(2,:));
+                plot(right_(1,:),right_(2,:));
+            end
+
+            xlabel('Global X'); ylabel('Global Y');
             title('Optimized Trajectory 3D Comparison')
-            legend('Estimated Trajectory','GNSS Measurements')
+            legend([p_est,p_gnss],'Estimated Trajectory','GNSS Measurements')
             
             figure(2); 
 %             snap_lla = [obj.snap.lat, obj.snap.lon, zeros(size(obj.snap.lat,1),1)];
@@ -984,12 +1033,12 @@ classdef optimizer < handle
             
             geoplot(P_lla(:,1),P_lla(:,2),'r.',...
                     obj.gnss.pos(:,1),obj.gnss.pos(:,2),'b.'); grid on; hold on;
-            geoplot(obj.snap.lat,obj.snap.lon,'y.','MarkerSize',8)
+%             geoplot(obj.snap.lat,obj.snap.lon,'c.','MarkerSize',8)
 
             geobasemap satellite
 
             title('Optimized Trajectory Comparison')
-            legend('Estimated Trajectory','GNSS Measurements','Road Snap')
+            legend('Estimated Trajectory','GNSS Measurements')
 
             figure(3); hold on; grid on;
             plot(obj.t,V(1,:),'r-');

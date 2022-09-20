@@ -52,16 +52,23 @@ class DataLoader:
         
         # Read CAN data
         DOI = self.raw_data['carState']
+        left = DOI['leftBlinker'].to_numpy()
+        right = DOI['rightBlinker'].to_numpy()
         whl_spd = DOI['rl'].to_numpy()
+        
         can_t = DOI.index
 
         self.data['can'] = {}
         self.data['can']['whl_spd'] = []
         self.data['can']['t'] = []
+        self.data['can']['leftBlinker'] = []
+        self.data['can']['rightBlinker'] = []
 
         for i in range(len(can_t)):
             self.data['can']['whl_spd'].append(whl_spd[i])
             self.data['can']['t'].append(can_t[i])
+            self.data['can']['leftBlinker'].append(left[i])
+            self.data['can']['rightBlinker'].append(right[i])
 
         # Read GNSS data
 
