@@ -413,6 +413,10 @@ classdef dataprocessor < handle
             laneFactorValidIntvs = [laneFactorValidIntvs; lb length(laneFactorValidIdxs) length(laneFactorValidIdxs)-lb+1];
             
             obj.proc_data.lane.FactorValidIntvs = laneFactorValidIntvs;
+            
+            % Augmented Indices
+            org = 1:length(laneFactorValidIdxs);
+            obj.proc_data.lane.FactorValidIdxs = org(laneFactorValidIdxs);
         end
         
         %% Visualize Processed data

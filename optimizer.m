@@ -608,7 +608,7 @@ classdef optimizer < handle
                 blk_height = blk_height + n;
             elseif strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
                 % Add prev_num states
-                num = sum(obj.lane.FactorValidIntvs(:,3));
+                num = length(obj.lane.FactorValidIdxs);
                 blk_width = blk_width + n + 2 * num * 2 * obj.lane.prev_num;
                 adder = n + 2 * num * 2 * obj.lane.prev_num;
             end
@@ -664,43 +664,42 @@ classdef optimizer < handle
                 end       
 
                 if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
+                    % Lane Prior: Need to Check!
                     Lane_res = zeros(2 * num * 2 * obj.lane.prev_num,1);
                     
-                    % Lane Variables Prior
-                    L_intvs = obj.lane.FactorValidIntvs;
-                    
-                    cnt = 0;
-                    for i=1:size(L_intvs,1)
-                        lb_idx = L_intvs(i,1); ub_idx = L_intvs(i,2);
-                        cnt_Leftadder = cnt*2*obj.lane.prev_num;
-                        cnt_Rightadder = num * 2 * obj.lane.prev_num + cnt_Leftadder;
+                    for i=1:length(obj.lane.FactorValidIdxs)
+                        state_idx = obj.lane.FactorValidIdxs(i);
+                        lane_idx = obj.lane.state_idxs(state_idx);
+                        
+                        stateLeftAdder = 2*obj.lane.prev_num*(i-1);
+                        stateRightAdder = stateLeftAdder + num * 2 * obj.lane.prev_num;
 
-                        for j=lb_idx:ub_idx
-                            lane_idx = obj.lane.state_idxs(j);
-                            j_adder = (j-lb_idx)*2*obj.lane.prev_num;
+                        for j=1:obj.lane.prev_num                                
+                            left = obj.states{i}.left(2:3,j); % Only take y z coordinates
+                            right = obj.states{i}.right(2:3,j); % Only take y z coordinates
+                            
+                            left_prior = [obj.lane.ly(lane_idx,j);obj.lane.lz(lane_idx,j)];
+                            right_prior = [obj.lane.ry(lane_idx,k);obj.lane.rz(lane_idx,j)];
 
-                            for k=1:obj.lane.prev_num                                
-                                left = obj.states{j}.left(2:3,k); % Only take y z coordinates
-                                right = obj.states{j}.right(2:3,k); % Only take y z coordinates
-                                
-                                left_prior = [obj.lane.ly(lane_idx,k);obj.lane.lz(lane_idx,k)];
-                                right_prior = [obj.lane.ry(lane_idx,k);obj.lane.rz(lane_idx,k)];
+                            left_cov = diag([obj.lane.lystd(lane_idx,j)^2,obj.lane.lzstd(lane_idx,j)^2]);
+                            right_cov = diag([obj.lane.rystd(lane_idx,j)^2,obj.lane.rzstd(lane_idx,j)^2]);
+                            
+                            % Residual
+                            Lane_res(stateLeftAdder+2*(j-1)+1:stateLeftAdder+2*(j-1)+2) = InvMahalanobis(left - left_prior,left_cov);
+                            Lane_res(stateRightAdder+2*(j-1)+1:stateRightAdder+2*(j-1)+2) = InvMahalanobis(right - right_prior,right_cov);
+                            
+                            % Jacobian
+                            % Left Lane
+                            I(9*3+6+n+stateLeftAdder+2*(j-1)+1:9*3+6+n+stateLeftAdder+2*(j-1)+2) = [15+n+stateLeftAdder+2*(j-1)+1,15+n+stateLeftAdder+2*(j-1)+2];
+                            J(9*3+6+n+stateLeftAdder+2*(j-1)+1:9*3+6+n+stateLeftAdder+2*(j-1)+2) = [16*n+stateLeftAdder+2*(j-1)+1,16*n+stateLeftAdder+2*(j-1)+2];
+                            V(9*3+6+n+stateLeftAdder+2*(j-1)+1:9*3+6+n+stateLeftAdder+2*(j-1)+2) = diag(InvMahalanobis(eye(2),left_cov));
 
-                                left_cov = diag([obj.lane.lystd(lane_idx,k),obj.lane.lzstd(lane_idx,k)]);
-                                right_cov = diag([obj.lane.rystd(lane_idx,k),obj.lane.rzstd(lane_idx,k)]);
-                                
-                                % Residual
-                                Lane_res(cnt_Leftadder+j_adder+2*(k-1)+1:cnt_Leftadder+j_adder+2*(k-1)+2) = InvMahalanobis(left - left_prior,left_cov);
-                                Lane_res(cnt_Rightadder+j_adder+2*(k-1)+1:cnt_Rightadder+j_adder+2*(k-1)+2) = InvMahalanobis(right - right_prior,right_cov);
-                                
-                                % Jacobian
-                                I(9*3+6+n)
-
-                            end
+                            % Right Lane
+                            I(9*3+6+n+stateRightAdder+2*(j-1)+1:9*3+6+n+stateRightAdder+2*(j-1)+2) = [15+n+stateRightAdder+2*(j-1)+1,15+n+stateRightAdder+2*(j-1)+2];
+                            J(9*3+6+n+stateRightAdder+2*(j-1)+1:9*3+6+n+stateRightAdder+2*(j-1)+2) = [16*n+stateRightAdder+2*(j-1)+1,16*n+stateRightAdder+2*(j-1)+2];
+                            V(9*3+6+n+stateRightAdder+2*(j-1)+1:9*3+6+n+stateRightAdder+2*(j-1)+2) = diag(InvMahalanobis(eye(2),right_cov));
                         end
-                        cnt = cnt + sum(obj.lane.FactorValidIntvs(i,3));
                     end
-
                 end
             end
             
@@ -909,13 +908,116 @@ classdef optimizer < handle
             % variables (x direction is fixed w.r.t vehicle frame)
             % 
             % Need to create curvature factor for additional feedback
+            %
+            % For better understanding, "next state" of 'i-th' state is
+            % written as 'i+1-th' state (ip1).
+            % * Caution: For IMU preintegration, next state was written as 
+            % 'j'th state
+            % 
             if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
                 ME_res = [];
                 ME_jac = [];
             else
+                n = length(obj.states);
+                num = length(obj.lane.FactorValidIdxs);
+                blk_width = 16*n + 2*num*2*obj.lane.prev_num;
+                % Number of Lane variables
+                % 
+                %      2      *       num      *      2       *     prev_num
+                % (Left/Right)   (# of states)  (y, z coords)   (preview number)
 
+                blk_height = 2 * (obj.lane.prev_num-1) * (num - size(obj.lane.FactorValidIntvs,1));
+                I_L = zeros(1,(6*4+4*3)*(obj.lane.prev_num-1) * (num - size(obj.lane.FactorValidIntvs,1)));
+                J_L = I_L; V_L = I_L;
+                I_R = I_L; J_R = I_L; V_R = I_L;
+                resL = zeros(blk_height,1);
+                resR = resL;
+                K = [1/10,0,0];
+                
+                % 
+                % For easier implementation, separate left and right lane
+                % residual and jacobian
+
+                cnt = 1; cnt2 = 1; % need to check cnt, cnt2 values are correct for full measurement
+                for i=1:num-1
+                    idx1 = obj.lane.FactorValidIdxs(i);
+                    idx2 = obj.lane.FactorValidIdxs(i+1);
+                    lane_idx1 = obj.lane.state_idxs(idx1);
+                    lane_idx2 = obj.lane.state_idxs(idx2);
+
+                    if idx2 - idx1 == 1 % Two frames are consecutive
+                        Ri = obj.states{idx1}.R;
+                        Pi = obj.states{idx1}.P;                        
+                        Rip1 = obj.states{idx2}.R;
+                        Pip1 = obj.states{idx2}.R;
+                        
+                        Lij_adder = 16*n+2*obj.lane.prev_num*(idx1-1);
+                        Lip1j_adder = 16*n+2*obj.lane.prev_num*(idx2-1);
+                        % Rij_adder
+                        % Rip1j_adder
+                        for j=1:obj.lane.prev_num-1
+                            % Since Extrapolation will cause serious
+                            % instability, last preview point is excluded
+                            % * Reason why curvature factor is needed
+                            
+                            % Left Lane
+                            Lij = obj.states{idx1}.left(:,j);
+                            Lijp1 = obj.states{idx1}.left(:,j+1);
+                            Lip1j = obj.states{idx2}.left(:,j);
+                            
+                            A_l = Ri' * (Pip1 + Rip1 * Lip1j - Pi);
+
+                            % Left Lane Residual
+                            stdLy = (j - K * Ri' * (Pip1 + Rip1 * Lip1j - Pi)) * obj.lane.lystd(lane_idx1,j) + ...
+                                    (K * Ri' * (Pip1 + Rip1 * Lip1j - Pi) - (j-1)) * obj.lane.lystd(lane_idx1,j+1);
+                            stdLz = (j - K * Ri' * (Pip1 + Rip1 * Lip1j - Pi)) * obj.lane.lzstd(lane_idx1,j) + ...
+                                    (K * Ri' * (Pip1 + Rip1 * Lip1j - Pi) - (j-1)) * obj.lane.lzstd(lane_idx1,j+1);
+                            
+                            covL = diag([stdLy^2,stdLz^2]);
+                            
+                            resL_ = -j * Lij + (j-1) * Lijp1 + A_l + (K * A_l) * (Lij - Lijp1); 
+                            resL(2*cnt-1:2*cnt) = InvMahalanobis(resL_(2:3),covL);
+                            
+                            % Left Lane Jacobian
+                            [JriL,JpiL,JLijL,JLijp1L,Jrip1L,Jpip1L,JLip1jL] = getMEJac(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,j);
+                            [I_riL,J_riL,V_riL] = sparseFormat(2*cnt-1:2*cnt,9*(idx1-1)+1:9*(idx1-1)+3,InvMahalanobis(JriL(2:3,:),covL));
+                            [I_piL,J_piL,V_piL] = sparseFormat(2*cnt-1:2*cnt,9*(idx1-1)+7:9*(idx1-1)+9,InvMahalanobis(JpiL(2:3,:),covL));
+                            [I_rip1L,J_rip1L,V_rip1L] = sparseFormat(2*cnt-1:2*cnt,9*(idx2-1)+1:9*(idx2-1)+3,InvMahalanobis(Jrip1L(2:3,:),covL));
+                            [I_pip1L,J_pip1L,V_pip1L] = sparseFormat(2*cnt-1:2*cnt,9*(idx2-1)+7:9*(idx2-1)+9,InvMahalanobis(Jpip1L(2:3,:),covL));
+                            [I_LijL,J_LijL,V_LijL] = sparseFormat(2*cnt-1:2*cnt,Lij_adder+2*j-1:Lij_adder+2*j,InvMahalanobis(JLijL(2:3,:),covL));
+                            [I_Lijp1L,J_Lijp1L,V_Lijp1L] = sparseFormat(2*cnt-1:2*cnt,Lij_adder+2*j+1:Lij_adder+2*j+2,InvMahalanobis(JLijp1L(2:3,:),covL));
+                            [I_Lip1jL,J_Lip1jL,V_Lip1jL] = sparseFormat(2*cnt-1:2*cnt,Lip1j_adder+2*j-1:Lip1j_adder+2*j,InvMahalanobis(JLip1jL(2:3,:),covL));
+                            
+                            I_L(36*(obj.lane.prev_num-1)*(cnt2-1)+36*(j-1)+1:36*(obj.lane.prev_num-1)*(cnt2-1)+36*j) = ...
+                                [I_riL,I_piL,I_rip1L,I_pip1L,I_LijL,I_Lijp1L,I_Lip1jL];
+
+                            J_L(36*(obj.lane.prev_num-1)*(cnt2-1)+36*(j-1)+1:36*(obj.lane.prev_num-1)*(cnt2-1)+36*j) = ...
+                                [J_riL,J_piL,J_rip1L,J_pip1L,J_LijL,J_Lijp1L,J_Lip1jL];
+                            
+                            V_L(36*(obj.lane.prev_num-1)*(cnt2-1)+36*(j-1)+1:36*(obj.lane.prev_num-1)*(cnt2-1)+36*j) = ...
+                                [V_riL,V_piL,V_rip1L,V_pip1L,V_LijL,V_Lijp1L,V_Lip1jL];
+
+                            % Right Lane
+                            Rij = obj.states{idx1}.right(:,j);
+                            Rijp1 = obj.states{idx1}.right(:,j+1);
+                            Rip1j = obj.states{idx2}.right(:,j);
+                            
+                            % Right Lane Residual
+                            % Right Lane Jacobian
+
+                            cnt = cnt + 1;
+                        end
+                        
+                        cnt2 = cnt2 + 1;
+                    % else: Lane Change happened in between --> Skip
+                    % Optimization
+                        
+                    end
+                end
+
+                ME_res = [resL;resR];
+                ME_jac = [sparse(I_L,J_L,V_L,blk_height,blk_width);sparse(I_R,J_R,V_R,blk_height,blk_width)];
             end
-            
         end
 
         %% Retraction
