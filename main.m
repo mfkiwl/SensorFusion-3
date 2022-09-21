@@ -48,36 +48,37 @@ options = struct();
 options.CostThres = 1e-6;
 options.StepThres = 1e-6;
 options.IterThres = 100;
-options.Algorithm = 'GN';
+options.Algorithm = 'TR';
 % GN : Gauss-Newton (Recommended for fast convergence, may not be stable for severely non-linear cases)
 % LM : Levenberg-Marquardt(Not recommended for batch-wise optimization: wrong convergence)
 % TR : Trust-Region (Recommended for stable convergence, but typically much slower than G-N method)
 
 % If selected algorithm is LM, need to define parameters additionally
-% options.LM = struct();
-% options.LM.eta = 0.1;
-% options.LM.Lu = 11; % Lambda Up multiplier
-% options.LM.Ld = 5; % Lambda Decrease divider
+options.LM = struct();
+options.LM.eta = 0.1;
+options.LM.Lu = 11; % Lambda Up multiplier
+options.LM.Ld = 5; % Lambda Decrease divider
 
 % If selected algorithm is TR, need to define parameters additionally
-% options.TR = struct();
-% options.TR.eta1 = 0.6;
-% options.TR.eta2 = 0.9;
-% options.TR.gamma1 = 0.1;
-% options.TR.gamma2 = 2;
+options.TR = struct();
+options.TR.eta1 = 0.6;
+options.TR.eta2 = 0.9;
+options.TR.gamma1 = 0.1;
+options.TR.gamma2 = 2;
+options.TR.thres = 1e-6; % Trust Region Radius Threshold
 
 lane_.prev_num = 6; % Set preview number
 %% INS + GNSS Fusion 
-sol = struct();
-sol.basic = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'basic',options);
-sol.basic.optimize();
-sol.basic.visualize();
+% sol = struct();
+% sol.basic = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'basic',options);
+% sol.basic.optimize();
+% sol.basic.visualize();
 
 %% INS + GNSS + WSS Fusion
-% sol = struct();
-% sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
-% sol.partial.optimize();
-% sol.partial.visualize();
+sol = struct();
+sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
+sol.partial.optimize();
+sol.partial.visualize();
 
 %% INS + GNSS + WSS + Lane Fusion
 

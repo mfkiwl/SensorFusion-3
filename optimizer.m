@@ -24,10 +24,11 @@ classdef optimizer < handle
 % [Methods] : using OPTIMIZER 
 % * optimize() : Find optimized solution to SNLS problem
 % * visualize() : Plot optimization results
-% 
+% * Other function methods are not designed to be used outside of this script 
+%
 % Implemented by JinHwan Jeon, 2022
 
-    properties
+    properties (Access = private)
         imu
         gnss
         lane
@@ -53,7 +54,7 @@ classdef optimizer < handle
         opt = struct() % Optimized results
     end
 
-    methods
+    methods (Access = public)
         %% Constructor
         function obj = optimizer(varargin)
             obj.imu = varargin{1};
@@ -94,7 +95,173 @@ classdef optimizer < handle
             % If mode is full, 2-phase, create initial value for lane
             % variables
         end
-        
+
+        %% Optimize
+        function obj = optimize(obj)
+            
+            % Optimize Sparse Nonlinear Least Squares in Batch Manner                     
+
+            disp('[Optimization Starts...]')
+
+            n = length(obj.imu)+1;
+
+            if strcmp(obj.mode,'basic')
+                obj.opt.x0 = zeros(15*n,1);
+            elseif strcmp(obj.mode,'partial')
+                obj.opt.x0 = zeros(16*n,1);
+            end
+            
+            % Run optimization depending on algorithm options
+            if strcmp(obj.opt.options.Algorithm,'GN')
+                obj.GaussNewton();
+            elseif strcmp(obj.opt.options.Algorithm,'LM')
+                obj.LevenbergMarquardt();
+            elseif strcmp(obj.opt.options.Algorithm,'TR')
+                obj.TrustRegion();
+            end
+
+            
+        end
+
+        %% Visualize
+        function visualize(obj)
+            n = length(obj.states);
+            
+            R = []; V = []; P = []; Bg = []; Ba = [];
+            V_b = []; whl_spd = []; S = [];
+            left = {}; right = {};
+
+            for i=1:n
+                R_ = obj.states{i}.R;
+                V_ = obj.states{i}.V;
+                P_ = obj.states{i}.P;
+                
+                Left_ = []; Right_ = [];
+                % Transform lane points to world frame
+
+                if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
+                    for j=1:obj.lane.prev_num
+                        left_ = obj.states{i}.left(:,j);
+                        right_ = obj.states{i}.right(:,j);
+    
+                        Left_ = [Left_ P_ + R_ * left_];
+                        Right_ = [Right_ P_ + R_ * right_];
+    
+                        
+                    end
+                    left = [left {Left_}];
+                    right = [right {Right_}];
+                end
+                
+                R = [R dcm2rpy(R_)];
+                V = [V V_]; P = [P P_];
+                V_b = [V_b R_' * V_];
+                Bg_ = obj.bias{i}.bg;
+                Ba_ = obj.bias{i}.ba;
+                Bg = [Bg Bg_]; Ba = [Ba Ba_];
+
+                can_idx = obj.can.state_idxs(i);
+                whl_spd = [whl_spd obj.can.whl_spd(can_idx)];
+                if ~strcmp(obj.mode,'basic')
+                    S = [S obj.states{i}.WSF];
+                end
+            end
+            gnss_pos = lla2enu(obj.gnss.pos,obj.gnss.lla0,'ellipsoid');
+            
+
+            figure(1); hold on; grid on; axis equal;
+%             p_est = plot3(P(1,:),P(2,:),P(3,:),'r.');
+%             p_gnss = plot3(gnss_pos(:,1),gnss_pos(:,2),gnss_pos(:,3),'b.');
+%             
+%             for i=1:n
+%                 left_ = left{i}; right_ = right{i};
+%                 plot3(left_(1,:),left_(2,:),left_(3,:));
+%                 plot3(right_(1,:),right_(2,:),right_(3,:));
+%             end
+            p_est = plot(P(1,:),P(2,:),'r.');
+            p_gnss = plot(gnss_pos(:,1),gnss_pos(:,2),'b.');
+            
+            if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
+                for i=1:n
+                    left_ = left{i}; right_ = right{i};
+                    plot(left_(1,:),left_(2,:));
+                    plot(right_(1,:),right_(2,:));
+                end
+            end
+
+            xlabel('Global X'); ylabel('Global Y');
+            title('Optimized Trajectory 3D Comparison')
+            legend([p_est,p_gnss],'Estimated Trajectory','GNSS Measurements')
+            
+            figure(2); 
+%             snap_lla = [obj.snap.lat, obj.snap.lon, zeros(size(obj.snap.lat,1),1)];
+            P_lla = enu2lla(P',obj.gnss.lla0,'ellipsoid');
+            
+            geoplot(P_lla(:,1),P_lla(:,2),'r.',...
+                    obj.gnss.pos(:,1),obj.gnss.pos(:,2),'b.'); grid on; hold on;
+%             geoplot(obj.snap.lat,obj.snap.lon,'c.','MarkerSize',8)
+
+            geobasemap satellite
+
+            title('Optimized Trajectory Comparison')
+            legend('Estimated Trajectory','GNSS Measurements')
+
+            figure(3); hold on; grid on;
+            plot(obj.t,V(1,:),'r-');
+            plot(obj.t,V(2,:),'g-');
+            plot(obj.t,V(3,:),'b-');
+            xlabel('Time(s)'); ylabel('V(m/s)')
+            title('Optimized Velocity')
+            legend('Vx','Vy','Vz')
+            
+            figure(4); hold on; grid on;
+            plot(obj.t,V_b(1,:),'r-');
+            plot(obj.t,V_b(2,:),'g-');
+            plot(obj.t,V_b(3,:),'b-');
+            plot(obj.t,whl_spd,'c-');
+            xlabel('Time(s)'); ylabel('V(m/s)')
+            title('Optimized Velocity (Body Frame)')
+            legend('Vx_{b}','Vy_{b}','Vz_{b}','Wheel Speed')
+
+            figure(5); hold on; grid on;
+
+            psi = wrapToPi(deg2rad(90 - obj.gnss.bearing));
+
+            plot(obj.t,R(1,:),'r-');
+            plot(obj.t,R(2,:),'g-');
+            plot(obj.t,R(3,:),'b-');
+            plot(obj.gnss.t-obj.gnss.t(1),psi,'c.')
+            xlabel('Time(s)'); ylabel('Angle(rad)')
+            title('Optimized RPY Angle Comparison')
+            legend('Roll','Pitch','Yaw','GNSS Yaw')
+            
+            figure(6); hold on; grid on;
+            plot(obj.t,Bg(1,:),'r-');
+            plot(obj.t,Bg(2,:),'g-');
+            plot(obj.t,Bg(3,:),'b-');
+            xlabel('Time(s)'); ylabel('Gyro Bias(rad/s)')
+            title('Optimized Gyro Bias Comparison')
+            legend('wbx','wby','wbz')
+
+            figure(7); hold on; grid on;
+            plot(obj.t,Ba(1,:),'r-');
+            plot(obj.t,Ba(2,:),'g-');
+            plot(obj.t,Ba(3,:),'b-');
+            xlabel('Time(s)'); ylabel('Accel Bias(m/s^2)')
+            title('Optimized Accel Bias Comparison')
+            legend('abx','aby','abz')
+
+            if strcmp(obj.mode,'partial')
+                figure(8); 
+                plot(obj.t,S); grid on;
+                xlabel('Time(s)'); ylabel('Wheel Speed Scaling Factor')
+                title('Optimized Wheel Speed Scaling Factor')
+            end
+        end
+
+    end
+
+    methods (Access = private)
         %% Pre-integration using IMU Measurements, given IMU idxs
         function obj = integrate(obj,idxs)
             m = length(idxs);
@@ -134,7 +301,7 @@ classdef optimizer < handle
                     w_k = w(:,k) - wb;
 
                     delRkkp1 = Exp_map(w_k * dt_k);
-                    [Ak, Bk] = getCoeff(delRik,delRkkp1,a_k,w_k,dt_k);
+                    [Ak, Bk] = obj.getCoeff(delRik,delRkkp1,a_k,w_k,dt_k);
 
 %                     noise_vec = Ak * noise_vec + Bk * n_k;
                     noise_cov = Ak * noise_cov * Ak' + Bk * (1/dt_k * n_cov) * Bk';
@@ -273,33 +440,6 @@ classdef optimizer < handle
 
         end
 
-        %% Optimize
-        function obj = optimize(obj)
-            
-            % Optimize Sparse Nonlinear Least Squares in Batch Manner                     
-
-            disp('[Optimization Starts...]')
-
-            n = length(obj.imu)+1;
-
-            if strcmp(obj.mode,'basic')
-                obj.opt.x0 = zeros(15*n,1);
-            elseif strcmp(obj.mode,'partial')
-                obj.opt.x0 = zeros(16*n,1);
-            end
-            
-            % Run optimization depending on algorithm options
-            if strcmp(obj.opt.options.Algorithm,'GN')
-                obj.GaussNewton();
-            elseif strcmp(obj.opt.options.Algorithm,'LM')
-                obj.LevenbergMarquardt();
-            elseif strcmp(obj.opt.options.Algorithm,'TR')
-                obj.TrustRegion();
-            end
-
-            
-        end
-        
         %% Gauss-Newton Method
         function obj = GaussNewton(obj)
             % Gauss-Newton method shows very fast convergence compared to 
@@ -344,7 +484,7 @@ classdef optimizer < handle
                 
                 % Check for oscillation around the local minima
                 if length(cost_stack) >= 5
-                    osc_flag = DetectOsc(cost_stack);
+                    osc_flag = obj.DetectOsc(cost_stack);
                 else
                     osc_flag = false;
                 end
@@ -446,7 +586,7 @@ classdef optimizer < handle
                 str = sprintf(formatstr,i,cost,step_size,lambda,string);
                 disp(str)
                 
-                lambda = UpdateLambda(lambda,Lu,Ld,flag);
+                lambda = obj.UpdateLambda(lambda,Lu,Ld,flag);
                 
                 if flag % Check Ending Criterion for Accepted Steps
                     obj.opt.flags = [];
@@ -515,7 +655,7 @@ classdef optimizer < handle
                 alpha = (b' * b)/(b' * A * b);
                 h_gd = alpha * b; % Gradient Descent Step
                 
-                x0 = ComputeDogLeg(h_gn,h_gd,tr_rad);
+                x0 = obj.ComputeDogLeg(h_gn,h_gd,tr_rad);
                 
                 dummy_states = obj.states; % need to check if change in dummy state changes obj.states
                 dummy_bias = obj.bias;
@@ -550,14 +690,15 @@ classdef optimizer < handle
                 str = sprintf(formatstr,i,cost,step_size,tr_rad,string);
                 disp(str)
                 
-                tr_rad = UpdateDelta(rho,tr_rad,eta1,eta2,gamma1,gamma2);
+                tr_rad = obj.UpdateDelta(rho,tr_rad,eta1,eta2,gamma1,gamma2);
                 
                 if flag % Check Ending Criterion for Accepted Steps
                     obj.opt.flags = [];
                     obj.opt.flags = [obj.opt.flags abs(ared) > obj.opt.options.CostThres];
                     obj.opt.flags = [obj.opt.flags step_size > obj.opt.options.StepThres];
                     obj.opt.flags = [obj.opt.flags i < obj.opt.options.IterThres];
-    
+                    obj.opt.flags = [obj.opt.flags tr_rad > obj.opt.options.TR.thres];
+
                     if length(find(obj.opt.flags)) ~= length(obj.opt.flags) % If any of the criterion is not met, end loop
                         
                         obj.retract(x0,'final');
@@ -571,12 +712,19 @@ classdef optimizer < handle
                             disp(['Current step size ',num2str(step_size),' is below threshold: ',num2str(obj.opt.options.StepThres)])
                         elseif idx == 3
                             disp(['Current iteration number ',num2str(i),' is above threshold: ',num2str(obj.opt.options.IterThres)])
+                        elseif idx == 4
+                            disp(['Current trust region radius ',num2str(tr_rad),' is below threshold: ',num2str(obj.opt.options.TR.thres)])
                         end
     
                         break;
                     end
 
                     i = i + 1;
+                else
+                    if tr_rad < obj.opt.options.TR.thres
+                        disp(['Current trust region radius ',num2str(tr_rad),' is below threshold: ',num2str(obj.opt.options.TR.thres)])
+                        break;
+                    end
                 end
             end
         end
@@ -765,8 +913,8 @@ classdef optimizer < handle
 
                 Veh_res((9*(i-1)+1):9*i) = InvMahalanobis([resR;resV;resP],Covij);
 
-                [Ji,Jj,Jb] = getIMUJac(resR,Ri,Rj,Vi,Vj,Pi,Pj,bgdi,JdelRij_bg,...
-                                       JdelVij_bg,JdelVij_ba,JdelPij_bg,JdelPij_ba,dtij);
+                [Ji,Jj,Jb] = obj.getIMUJac(resR,Ri,Rj,Vi,Vj,Pi,Pj,bgdi,JdelRij_bg,...
+                                           JdelVij_bg,JdelVij_ba,JdelPij_bg,JdelPij_ba,dtij);
                 
                 [I_1,J_1,V_1] = sparseFormat(9*(i-1)+1:9*(i-1)+9,9*(i-1)+1:9*(i-1)+9,InvMahalanobis(Ji,Covij));
                 [I_2,J_2,V_2] = sparseFormat(9*(i-1)+1:9*(i-1)+9,9*i+1:9*i+9,InvMahalanobis(Jj,Covij));
@@ -886,7 +1034,7 @@ classdef optimizer < handle
                     res =  1/Si * (Ri' * Vi - skew(wi - bgi - bgdi) * L) - V_meas;
                     WSS_res(3*(i-2)+1:3*(i-2)+3) = InvMahalanobis(res,wss_cov);
     
-                    [Jrv,Jbg,Js] = getWSSJac(Ri,Vi,Si,wi,bgi,bgdi,L);
+                    [Jrv,Jbg,Js] = obj.getWSSJac(Ri,Vi,Si,wi,bgi,bgdi,L);
 
                     [I_rv,J_rv,V_rv] = sparseFormat(3*(i-2)+1:3*(i-2)+3,9*(i-1)+1:9*(i-1)+6,InvMahalanobis(Jrv,wss_cov));
                     [I_bg,J_bg,V_bg] = sparseFormat(3*(i-2)+1:3*(i-2)+3,9*n+6*(i-1)+1:9*n+6*(i-1)+3,InvMahalanobis(Jbg,wss_cov));
@@ -979,7 +1127,7 @@ classdef optimizer < handle
                             resL(2*cnt-1:2*cnt) = InvMahalanobis(resL_(2:3),covL);
                             
                             % Left Lane Jacobian
-                            [JriL,JpiL,JLijL,JLijp1L,Jrip1L,Jpip1L,JLip1jL] = getMEJac(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,j);
+                            [JriL,JpiL,JLijL,JLijp1L,Jrip1L,Jpip1L,JLip1jL] = obj.getMEJac(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,j);
                             [I_riL,J_riL,V_riL] = sparseFormat(2*cnt-1:2*cnt,9*(idx1-1)+1:9*(idx1-1)+3,InvMahalanobis(JriL(2:3,:),covL));
                             [I_piL,J_piL,V_piL] = sparseFormat(2*cnt-1:2*cnt,9*(idx1-1)+7:9*(idx1-1)+9,InvMahalanobis(JpiL(2:3,:),covL));
                             [I_rip1L,J_rip1L,V_rip1L] = sparseFormat(2*cnt-1:2*cnt,9*(idx2-1)+1:9*(idx2-1)+3,InvMahalanobis(Jrip1L(2:3,:),covL));
@@ -1129,249 +1277,122 @@ classdef optimizer < handle
             end            
         end
 
-        %% Visualize
-        function visualize(obj)
-            n = length(obj.states);
-            
-            R = []; V = []; P = []; Bg = []; Ba = [];
-            V_b = []; whl_spd = []; S = [];
-            left = {}; right = {};
+    end
 
-            for i=1:n
-                R_ = obj.states{i}.R;
-                V_ = obj.states{i}.V;
-                P_ = obj.states{i}.P;
-                
-                Left_ = []; Right_ = [];
-                % Transform lane points to world frame
-                for j=1:obj.lane.prev_num
-                    left_ = obj.states{i}.left(:,j);
-                    right_ = obj.states{i}.right(:,j);
+    methods (Static)
+        %% Coefficient matrices for covariance propagation
+        function [Ak, Bk] = getCoeff(delRik, delRkkp1, a_k, w_k, dt_k)
+            Ak = zeros(9,9); Bk = zeros(9,6);
+            Ak(1:3,1:3) = delRkkp1';
+            Ak(4:6,1:3) = -delRik * skew(a_k) * dt_k;
+            Ak(4:6,4:6) = eye(3);
+            Ak(7:9,1:3) = -1/2 * delRik * skew(a_k) * dt_k^2;
+            Ak(7:9,4:6) = eye(3) * dt_k;
+            Ak(7:9,7:9) = eye(3);
+        
+            Bk(1:3,1:3) = RightJac(w_k * dt_k) * dt_k;
+            Bk(4:6,4:6) = delRik * dt_k;
+            Bk(7:9,4:6) = 1/2 * delRik * dt_k^2;
+        end
 
-                    Left_ = [Left_ P_ + R_ * left_];
-                    Right_ = [Right_ P_ + R_ * right_];
-
-                    
-                end
-                left = [left {Left_}];
-                right = [right {Right_}];
-                
-                R = [R dcm2rpy(R_)];
-                V = [V V_]; P = [P P_];
-                V_b = [V_b R_' * V_];
-                Bg_ = obj.bias{i}.bg;
-                Ba_ = obj.bias{i}.ba;
-                Bg = [Bg Bg_]; Ba = [Ba Ba_];
-
-                can_idx = obj.can.state_idxs(i);
-                whl_spd = [whl_spd obj.can.whl_spd(can_idx)];
-                if ~strcmp(obj.mode,'basic')
-                    S = [S obj.states{i}.WSF];
-                end
+        %% IMU Jacobians
+        function [Ji,Jj,Jb] = getIMUJac(resR,Ri,Rj,Vi,Vj,Pi,Pj,bgdi,JdelRij_bg,JdelVij_bg,JdelVij_ba,JdelPij_bg,JdelPij_ba,dtij)
+            grav = [0;0;-9.81];
+            Ji = zeros(9,9); Jj = zeros(9,9); Jb = zeros(9,6);
+            Ji(1:3,1:3) = -InvRightJac(resR) * Rj' * Ri;
+            Ji(4:6,1:3) = skew(Ri' * (Vj - Vi - grav * dtij));
+            Ji(4:6,4:6) = -Ri';
+            Ji(7:9,1:3) = skew(Ri' * (Pj - Pi - Vi * dtij - 1/2 * grav * dtij^2));
+            Ji(7:9,4:6) = -Ri' * dtij;
+            Ji(7:9,7:9) = -eye(3);
+        
+            Jj(1:3,1:3) = InvRightJac(resR);
+            Jj(4:6,4:6) = Ri';
+            Jj(7:9,7:9) = Ri' * Rj;
+        
+            Jb(1:3,1:3) = -InvRightJac(resR) * Exp_map(resR)' * RightJac(JdelRij_bg * bgdi) * JdelRij_bg;
+            Jb(4:6,1:3) = -JdelVij_bg;
+            Jb(4:6,4:6) = -JdelVij_ba;
+            Jb(7:9,1:3) = -JdelPij_bg;
+            Jb(7:9,4:6) = -JdelPij_ba;
+        end
+        
+        %% WSS Jacobians
+        function [Jrv,Jbg,Js] = getWSSJac(Ri,Vi,Si,wi,bgi,bgdi,L)
+            Jrv = zeros(3,6); % Horizontally Augmented for R and V
+            Jrv(:,1:3) = 1/Si * skew(Ri' * Vi);
+            Jrv(:,4:6) = 1/Si * Ri';
+        
+            Jbg = -1/Si * skew(L);
+            Js = -1/Si^2 * (Ri' * Vi - skew(wi - bgi - bgdi) * L);
+        %     Jl = -1/Si * skew(wi - bgi - bgdi);
+        %     Jl = Jl(:,1); % Only take the longitudinal lever arm as the optimization variable
+        end
+        
+        %% Lane Measurement Jacobian
+        function [Jri,Jpi,JLij,JLijp1,Jrip1,Jpip1,JLip1j] = getMEJac(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,j)
+            A = Ri' * (Pip1 + Rip1 * Lip1j - Pi);
+            B = eye(3) + 1/10 * [Lij - Lijp1 zeros(3,2)];
+            K = [1/10, 0, 0];
+        
+            Jri = skew(A) * B;
+            Jpi = -B;
+            JLij = K * A - j;
+            JLijp1= j-1 - K * A;
+            Jrip1 = -Ri' * Rip1 * skew(Lip1j) * B;
+            Jpip1 = Ri' * Rip1 * B;
+            JLip1j = Jpip1;
+        end
+        
+        %% Compute Dog-Leg Step for Approximate Trust Region Method
+        function h_dl = ComputeDogLeg(h_gn,h_gd,tr_rad)
+            N_hgn = norm(h_gn); N_hgd = norm(h_gd);
+            if N_hgn <= tr_rad
+                h_dl = h_gn;
+            elseif N_hgd >= tr_rad
+                h_dl = (tr_rad/N_hgd) * h_gd;
+            else
+                v = h_gn - h_gd;
+                hgdv = h_gd' * v;
+                vsq = v' * v;
+                beta = (-hgdv + sqrt(hgdv^2 + (tr_rad^2 - h_gd' * h_gd)*vsq)) / vsq;
+                h_dl = h_gd + beta * v;
             end
-            gnss_pos = lla2enu(obj.gnss.pos,obj.gnss.lla0,'ellipsoid');
-            
-
-            figure(1); hold on; grid on; axis equal;
-%             p_est = plot3(P(1,:),P(2,:),P(3,:),'r.');
-%             p_gnss = plot3(gnss_pos(:,1),gnss_pos(:,2),gnss_pos(:,3),'b.');
-%             
-%             for i=1:n
-%                 left_ = left{i}; right_ = right{i};
-%                 plot3(left_(1,:),left_(2,:),left_(3,:));
-%                 plot3(right_(1,:),right_(2,:),right_(3,:));
-%             end
-            p_est = plot(P(1,:),P(2,:),'r.');
-            p_gnss = plot(gnss_pos(:,1),gnss_pos(:,2),'b.');
-            
-            for i=1:n
-                left_ = left{i}; right_ = right{i};
-                plot(left_(1,:),left_(2,:));
-                plot(right_(1,:),right_(2,:));
+        end
+        
+        %% Update trust-region radius according to gain ratio value (rho)
+        function Delta = UpdateDelta(rho,tr_rad,eta1,eta2,gamma1,gamma2)
+            if rho >= eta2
+                Delta = gamma2 * tr_rad;
+            elseif rho < eta1
+                Delta = gamma1 * tr_rad;
+            else
+                Delta = tr_rad;
             end
-
-            xlabel('Global X'); ylabel('Global Y');
-            title('Optimized Trajectory 3D Comparison')
-            legend([p_est,p_gnss],'Estimated Trajectory','GNSS Measurements')
-            
-            figure(2); 
-%             snap_lla = [obj.snap.lat, obj.snap.lon, zeros(size(obj.snap.lat,1),1)];
-            P_lla = enu2lla(P',obj.gnss.lla0,'ellipsoid');
-            
-            geoplot(P_lla(:,1),P_lla(:,2),'r.',...
-                    obj.gnss.pos(:,1),obj.gnss.pos(:,2),'b.'); grid on; hold on;
-%             geoplot(obj.snap.lat,obj.snap.lon,'c.','MarkerSize',8)
-
-            geobasemap satellite
-
-            title('Optimized Trajectory Comparison')
-            legend('Estimated Trajectory','GNSS Measurements')
-
-            figure(3); hold on; grid on;
-            plot(obj.t,V(1,:),'r-');
-            plot(obj.t,V(2,:),'g-');
-            plot(obj.t,V(3,:),'b-');
-            xlabel('Time(s)'); ylabel('V(m/s)')
-            title('Optimized Velocity')
-            legend('Vx','Vy','Vz')
-            
-            figure(4); hold on; grid on;
-            plot(obj.t,V_b(1,:),'r-');
-            plot(obj.t,V_b(2,:),'g-');
-            plot(obj.t,V_b(3,:),'b-');
-            plot(obj.t,whl_spd,'c-');
-            xlabel('Time(s)'); ylabel('V(m/s)')
-            title('Optimized Velocity (Body Frame)')
-            legend('Vx_{b}','Vy_{b}','Vz_{b}','Wheel Speed')
-
-            figure(5); hold on; grid on;
-
-            psi = wrapToPi(deg2rad(90 - obj.gnss.bearing));
-
-            plot(obj.t,R(1,:),'r-');
-            plot(obj.t,R(2,:),'g-');
-            plot(obj.t,R(3,:),'b-');
-            plot(obj.gnss.t-obj.gnss.t(1),psi,'c.')
-            xlabel('Time(s)'); ylabel('Angle(rad)')
-            title('Optimized RPY Angle Comparison')
-            legend('Roll','Pitch','Yaw','GNSS Yaw')
-            
-            figure(6); hold on; grid on;
-            plot(obj.t,Bg(1,:),'r-');
-            plot(obj.t,Bg(2,:),'g-');
-            plot(obj.t,Bg(3,:),'b-');
-            xlabel('Time(s)'); ylabel('Gyro Bias(rad/s)')
-            title('Optimized Gyro Bias Comparison')
-            legend('wbx','wby','wbz')
-
-            figure(7); hold on; grid on;
-            plot(obj.t,Ba(1,:),'r-');
-            plot(obj.t,Ba(2,:),'g-');
-            plot(obj.t,Ba(3,:),'b-');
-            xlabel('Time(s)'); ylabel('Accel Bias(m/s^2)')
-            title('Optimized Accel Bias Comparison')
-            legend('abx','aby','abz')
-
-            if strcmp(obj.mode,'partial')
-                figure(8); 
-                plot(obj.t,S); grid on;
-                xlabel('Time(s)'); ylabel('Wheel Speed Scaling Factor')
-                title('Optimized Wheel Speed Scaling Factor')
+        end
+        
+        %% Update Levenberg-Marquardt lambda value according to gain ration value
+        function Lambda = UpdateLambda(lambda,Lu,Ld,flag)
+            if flag
+                Lambda = max([lambda/Ld,1e-7]);
+            else
+                Lambda = min([lambda*Lu,1e7]);
+            end
+        end
+        
+        %% Detect oscillation by computing maximum deviation from average (recent 5 costs)
+        function osc_flag = DetectOsc(cost_stack)
+            last_five = cost_stack(end-4:end);
+            avg = mean(last_five);
+            delta = last_five - avg;
+            % If all recent costs are near the average, detect oscillation
+            if max(delta) < 1e2
+                osc_flag = true;
+            else
+                osc_flag = false;
             end
         end
 
     end
 end
 
-function [Ak, Bk] = getCoeff(delRik, delRkkp1, a_k, w_k, dt_k)
-% Coefficient matrices for covariance propagation
-    Ak = zeros(9,9); Bk = zeros(9,6);
-    Ak(1:3,1:3) = delRkkp1';
-    Ak(4:6,1:3) = -delRik * skew(a_k) * dt_k;
-    Ak(4:6,4:6) = eye(3);
-    Ak(7:9,1:3) = -1/2 * delRik * skew(a_k) * dt_k^2;
-    Ak(7:9,4:6) = eye(3) * dt_k;
-    Ak(7:9,7:9) = eye(3);
-
-    Bk(1:3,1:3) = RightJac(w_k * dt_k) * dt_k;
-    Bk(4:6,4:6) = delRik * dt_k;
-    Bk(7:9,4:6) = 1/2 * delRik * dt_k^2;
-end
-
-function [Ji,Jj,Jb] = getIMUJac(resR,Ri,Rj,Vi,Vj,Pi,Pj,bgdi,JdelRij_bg,JdelVij_bg,JdelVij_ba,JdelPij_bg,JdelPij_ba,dtij)
-% IMU Jacobians
-    grav = [0;0;-9.81];
-    Ji = zeros(9,9); Jj = zeros(9,9); Jb = zeros(9,6);
-    Ji(1:3,1:3) = -InvRightJac(resR) * Rj' * Ri;
-    Ji(4:6,1:3) = skew(Ri' * (Vj - Vi - grav * dtij));
-    Ji(4:6,4:6) = -Ri';
-    Ji(7:9,1:3) = skew(Ri' * (Pj - Pi - Vi * dtij - 1/2 * grav * dtij^2));
-    Ji(7:9,4:6) = -Ri' * dtij;
-    Ji(7:9,7:9) = -eye(3);
-
-    Jj(1:3,1:3) = InvRightJac(resR);
-    Jj(4:6,4:6) = Ri';
-    Jj(7:9,7:9) = Ri' * Rj;
-
-    Jb(1:3,1:3) = -InvRightJac(resR) * Exp_map(resR)' * RightJac(JdelRij_bg * bgdi) * JdelRij_bg;
-    Jb(4:6,1:3) = -JdelVij_bg;
-    Jb(4:6,4:6) = -JdelVij_ba;
-    Jb(7:9,1:3) = -JdelPij_bg;
-    Jb(7:9,4:6) = -JdelPij_ba;
-end
-
-function [Jrv,Jbg,Js] = getWSSJac(Ri,Vi,Si,wi,bgi,bgdi,L)
-% WSS Jacobians
-    Jrv = zeros(3,6); % Horizontally Augmented for R and V
-    Jrv(:,1:3) = 1/Si * skew(Ri' * Vi);
-    Jrv(:,4:6) = 1/Si * Ri';
-
-    Jbg = -1/Si * skew(L);
-    Js = -1/Si^2 * (Ri' * Vi - skew(wi - bgi - bgdi) * L);
-%     Jl = -1/Si * skew(wi - bgi - bgdi);
-%     Jl = Jl(:,1); % Only take the longitudinal lever arm as the optimization variable
-end
-
-function [Jri,Jpi,JLij,JLijp1,Jrip1,Jpip1,JLip1j] = getMEJac(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,j)
-% Lane Measurement Jacobian
-    A = Ri' * (Pip1 + Rip1 * Lip1j - Pi);
-    B = eye(3) + 1/10 * [Lij - Lijp1 zeros(3,2)];
-    K = [1/10, 0, 0];
-
-    Jri = skew(A) * B;
-    Jpi = -B;
-    JLij = K * A - j;
-    JLijp1= j-1 - K * A;
-    Jrip1 = -Ri' * Rip1 * skew(Lip1j) * B;
-    Jpip1 = Ri' * Rip1 * B;
-    JLip1j = Jpip1;
-end
-
-function h_dl = ComputeDogLeg(h_gn,h_gd,tr_rad)
-% Compute Dog-Leg Step for Approximate Trust Region Method
-    N_hgn = norm(h_gn); N_hgd = norm(h_gd);
-    if N_hgn <= tr_rad
-        h_dl = h_gn;
-    elseif N_hgd >= tr_rad
-        h_dl = (tr_rad/N_hgd) * h_gd;
-    else
-        v = h_gn - h_gd;
-        hgdv = h_gd' * v;
-        vsq = v' * v;
-        beta = (-hgdv + sqrt(hgdv^2 + (tr_rad^2 - h_gd' * h_gd)*vsq)) / vsq;
-        h_dl = h_gd + beta * v;
-    end
-end
-
-function Delta = UpdateDelta(rho,tr_rad,eta1,eta2,gamma1,gamma2)
-% Update trust-region radius according to gain ratio value (rho)
-    if rho >= eta2
-        Delta = gamma2 * tr_rad;
-    elseif rho < eta1
-        Delta = gamma1 * tr_rad;
-    else
-        Delta = tr_rad;
-    end
-end
-
-function Lambda = UpdateLambda(lambda,Lu,Ld,flag)
-% Update Levenberg-Marquardt lambda value according to gain ration value
-    if flag
-        Lambda = max([lambda/Ld,1e-7]);
-    else
-        Lambda = min([lambda*Lu,1e7]);
-    end
-end
-
-function osc_flag = DetectOsc(cost_stack)
-% Detect oscillation by computing maximum deviation from average (recent 5 costs)
-    last_five = cost_stack(end-4:end);
-    avg = mean(last_five);
-    delta = last_five - avg;
-    % If all recent costs are near the average, detect oscillation
-    if max(delta) < 1e2
-        osc_flag = true;
-    else
-        osc_flag = false;
-    end
-end
