@@ -341,29 +341,78 @@ classdef dataprocessor < handle
 
             
             %% Mark unstable lane data (lane change, etc)
-            % Unstable lane data will not be used for optimization
-            % No lane related states for that timestep
-%             n = length(obj.proc_data.lane.state_idxs);
-%             valid = [];
-%             for i=1:n
-%                 idx = obj.proc_data.lane.state_idxs(i);
-%                 validity = obj.proc_data.lane.prob(idx);
-%                 if validity < 0.8
-%                     valid = [valid false];
-%                 else
-%                     valid = [valid true];
-%                 end
+            % Current rule: Do not perform optimization for lane data
+            % during lane change
+            % May not be using can information directly in the future
+            % Lane Change Detection (윤진형)
+
+%             can_lane_idxs = [];
+% 
+%             for i=1:length(obj.raw_data.lane.t)
+%                 lane_t = obj.raw_data.lane.t(i);
+%                 [~,idx] = min(abs(lane_t - obj.raw_data.can.t));
+%                 can_lane_idxs = [can_lane_idxs idx];
 %             end
+%             obj.raw_data.can.can_lane_idxs = can_lane_idxs;
 
-            can_lane_idxs = [];
-
-            for i=1:length(obj.raw_data.lane.t)
-                lane_t = obj.raw_data.lane.t(i);
-                [~,idx] = min(abs(lane_t - obj.raw_data.can.t));
-                can_lane_idxs = [can_lane_idxs idx];
+            % Find Lane Change time intervals
+            LC_intvs = [];
+            for i=2:length(obj.raw_data.can.t)
+                % LC Start
+                if (obj.raw_data.can.leftBlinker(i-1) == 0 && obj.raw_data.can.rightBlinker(i-1) == 0) && (obj.raw_data.can.leftBlinker(i) == 1 || obj.raw_data.can.rightBlinker(i) == 1)
+                    t_lb = obj.raw_data.can.t(i);
+                % LC End
+                elseif (obj.raw_data.can.leftBlinker(i-1) == 1 || obj.raw_data.can.rightBlinker(i-1) == 1) && (obj.raw_data.can.leftBlinker(i) == 0 && obj.raw_data.can.rightBlinker(i) == 0)
+                    t_ub = obj.raw_data.can.t(i);
+                    LC_intvs = [LC_intvs; t_lb t_ub];
+                end
             end
-            obj.raw_data.can.can_lane_idxs = can_lane_idxs;
+            obj.proc_data.can.LC_intvs = LC_intvs;
             
+%             figure(1);
+%             plot(obj.raw_data.can.t,obj.raw_data.can.leftBlinker,'r-'); hold on; grid on;
+%             plot(obj.raw_data.can.t,obj.raw_data.can.rightBlinker,'b-');
+%             for i=1:size(LC_intvs,1)
+%                 T = LC_intvs(i,:);
+%                 t = [T(1),T(1),T(2),T(2),T(1)];
+%                 y = [0,1,1,0,0];
+%                 plot(t,y,'k--',LineWidth=2);
+%             end
+            
+            cnt = 1;
+            laneFactorValidIdxs = true(1,length(obj.proc_data.full_t));
+            for i=1:length(obj.proc_data.full_t)
+                if obj.proc_data.full_t(i) >= LC_intvs(cnt,1) && obj.proc_data.full_t(i) <= LC_intvs(cnt,2)
+                    laneFactorValidIdxs(i) = false;
+                elseif obj.proc_data.full_t(i) > LC_intvs(cnt,2)
+                    if cnt == size(LC_intvs,1)
+                        break;
+                    else
+                        cnt = cnt + 1;
+                    end                    
+                end
+            end
+            
+            % laneFactorValidIntvs: Valid state idxs for lane factor 
+            % Other than these indices, lane variables are not defined
+            % Format: [lower_bound_index, upper_bound_index, number of valid indices in this interval]
+            % Use 'sum.m' to find total number of valid indices when
+            % computing the height of Block Jacobian or Measurement
+            % Residual.
+
+            lb = 1;
+            laneFactorValidIntvs = [];
+            for i=2:length(laneFactorValidIdxs)
+                if laneFactorValidIdxs(i-1) == 1 && laneFactorValidIdxs(i) == 0
+                    laneFactorValidIntvs = [laneFactorValidIntvs; lb i-1 i-1-lb+1];
+                elseif laneFactorValidIdxs(i-1) == 0 && laneFactorValidIdxs(i) == 1
+                    lb = i;
+                end
+            end
+
+            laneFactorValidIntvs = [laneFactorValidIntvs; lb length(laneFactorValidIdxs) length(laneFactorValidIdxs)-lb+1];
+            
+            obj.proc_data.lane.FactorValidIntvs = laneFactorValidIntvs;
         end
         
         %% Visualize Processed data

@@ -74,21 +74,14 @@ lane_.prev_num = 6; % Set preview number
 % sol.basic.visualize();
 
 %% INS + GNSS + WSS Fusion
-sol = struct();
-sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
-sol.partial.optimize();
-%%
-sol.partial.visualize();
+% sol = struct();
+% sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
+% sol.partial.optimize();
+% sol.partial.visualize();
 
 %% INS + GNSS + WSS + Lane Fusion
 
-% sol = struct();
-% sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'2-phase',options);
-% % sol.partial.optimize();
-% sol.partial.visualize();
-
-%% Test getSphereRad
-Points = [0, 0, 2, 2;
-          0, 2, 0, 2;
-          0, 0, 0, 1];
-R = getSphereRad(Points);
+sol = struct();
+sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'full',options);
+% sol.partial.optimize();
+sol.partial.visualize();

@@ -255,7 +255,11 @@ classdef optimizer < handle
                 if ~strcmp(obj.mode,'basic')
                     state_.WSF = 1;                    
                 end
-                lane_idx = obj.lane.state_idxs(i+1);    
+                lane_idx = obj.lane.state_idxs(i+1);  
+
+                % Perhaps change this part so that lane states are only
+                % created for only valid intvs
+                % (Exclude Lane Changing intervals)
                 state_.left = [0:10:10*(prev_num-1);
                                obj.lane.ly(lane_idx,1:prev_num);
                                obj.lane.lz(lane_idx,1:prev_num)];
@@ -584,9 +588,10 @@ classdef optimizer < handle
             [MM_res,MM_jac] = obj.CreateMMBlock();
             [GNSS_res,GNSS_jac] = obj.CreateGNSSBlock();
             [WSS_res,WSS_jac] = obj.CreateWSSBlock();
+            [ME_res,ME_jac] = obj.CreateMEBlock();
 
-            res = vertcat(Pr_res,MM_res,GNSS_res,WSS_res);
-            jac = vertcat(Pr_jac,MM_jac,GNSS_jac,WSS_jac);            
+            res = vertcat(Pr_res,MM_res,GNSS_res,WSS_res,ME_res);
+            jac = vertcat(Pr_jac,MM_jac,GNSS_jac,WSS_jac,ME_jac);            
         end
         
         %% Prior Residual and Jacobian
@@ -595,6 +600,7 @@ classdef optimizer < handle
             blk_width = 15*n;
             blk_height = 15;
             adder = 0;
+
             if strcmp(obj.mode,'partial')
                 blk_width = blk_width + n;
                 adder = n ;
@@ -602,6 +608,9 @@ classdef optimizer < handle
                 blk_height = blk_height + n;
             elseif strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
                 % Add prev_num states
+                num = sum(obj.lane.FactorValidIntvs(:,3));
+                blk_width = blk_width + n + 2 * num * 2 * obj.lane.prev_num;
+                adder = n + 2 * num * 2 * obj.lane.prev_num;
             end
 
             Veh_cov = blkdiag(obj.covs.prior.R,obj.covs.prior.V,obj.covs.prior.P);
@@ -642,8 +651,8 @@ classdef optimizer < handle
             J(9*3+1:9*3+6) = 9*n+1:9*n+6;
             V(9*3+1:9*3+6) = [V_1b V_2b];
             
-            WSS_res = []; Params_res = [];
-            if strcmp(obj.mode,'partial')
+            WSS_res = []; Lane_res = [];
+            if ~strcmp(obj.mode,'basic')
                 % WSF Prior
                 WSS_res = zeros(n,1);
                 for i=1:n
@@ -652,10 +661,50 @@ classdef optimizer < handle
                     I(9*3+6+i) = 15+i;
                     J(9*3+6+i) = 15*n+i;
                     V(9*3+6+i) = InvMahalanobis(1,obj.covs.prior.WSF);
-                end                
+                end       
+
+                if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
+                    Lane_res = zeros(2 * num * 2 * obj.lane.prev_num,1);
+                    
+                    % Lane Variables Prior
+                    L_intvs = obj.lane.FactorValidIntvs;
+                    
+                    cnt = 0;
+                    for i=1:size(L_intvs,1)
+                        lb_idx = L_intvs(i,1); ub_idx = L_intvs(i,2);
+                        cnt_Leftadder = cnt*2*obj.lane.prev_num;
+                        cnt_Rightadder = num * 2 * obj.lane.prev_num + cnt_Leftadder;
+
+                        for j=lb_idx:ub_idx
+                            lane_idx = obj.lane.state_idxs(j);
+                            j_adder = (j-lb_idx)*2*obj.lane.prev_num;
+
+                            for k=1:obj.lane.prev_num                                
+                                left = obj.states{j}.left(2:3,k); % Only take y z coordinates
+                                right = obj.states{j}.right(2:3,k); % Only take y z coordinates
+                                
+                                left_prior = [obj.lane.ly(lane_idx,k);obj.lane.lz(lane_idx,k)];
+                                right_prior = [obj.lane.ry(lane_idx,k);obj.lane.rz(lane_idx,k)];
+
+                                left_cov = diag([obj.lane.lystd(lane_idx,k),obj.lane.lzstd(lane_idx,k)]);
+                                right_cov = diag([obj.lane.rystd(lane_idx,k),obj.lane.rzstd(lane_idx,k)]);
+                                
+                                % Residual
+                                Lane_res(cnt_Leftadder+j_adder+2*(k-1)+1:cnt_Leftadder+j_adder+2*(k-1)+2) = InvMahalanobis(left - left_prior,left_cov);
+                                Lane_res(cnt_Rightadder+j_adder+2*(k-1)+1:cnt_Rightadder+j_adder+2*(k-1)+2) = InvMahalanobis(right - right_prior,right_cov);
+                                
+                                % Jacobian
+                                I(9*3+6+n)
+
+                            end
+                        end
+                        cnt = cnt + sum(obj.lane.FactorValidIntvs(i,3));
+                    end
+
+                end
             end
             
-            Pr_res = [Veh_res; Bias_res; WSS_res; Params_res];
+            Pr_res = [Veh_res; Bias_res; WSS_res;Lane_res];
             Pr_jac = sparse(I,J,V,blk_height,blk_width);
         end
         
@@ -851,6 +900,22 @@ classdef optimizer < handle
 
                 WSS_jac = sparse(I,J,V,3*(n-2),blk_width);
             end
+        end
+        
+        %% Lane Measurement Residual and Jacobian
+        function [ME_res,ME_jac] = CreateMEBlock(obj)
+            % Version 1: Naive Model (No lane merging)
+            % 3 Dimensional Model, but only y, z coords are optimization
+            % variables (x direction is fixed w.r.t vehicle frame)
+            % 
+            % Need to create curvature factor for additional feedback
+            if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
+                ME_res = [];
+                ME_jac = [];
+            else
+
+            end
+            
         end
 
         %% Retraction
@@ -1097,6 +1162,7 @@ classdef optimizer < handle
 end
 
 function [Ak, Bk] = getCoeff(delRik, delRkkp1, a_k, w_k, dt_k)
+% Coefficient matrices for covariance propagation
     Ak = zeros(9,9); Bk = zeros(9,6);
     Ak(1:3,1:3) = delRkkp1';
     Ak(4:6,1:3) = -delRik * skew(a_k) * dt_k;
@@ -1111,6 +1177,7 @@ function [Ak, Bk] = getCoeff(delRik, delRkkp1, a_k, w_k, dt_k)
 end
 
 function [Ji,Jj,Jb] = getIMUJac(resR,Ri,Rj,Vi,Vj,Pi,Pj,bgdi,JdelRij_bg,JdelVij_bg,JdelVij_ba,JdelPij_bg,JdelPij_ba,dtij)
+% IMU Jacobians
     grav = [0;0;-9.81];
     Ji = zeros(9,9); Jj = zeros(9,9); Jb = zeros(9,6);
     Ji(1:3,1:3) = -InvRightJac(resR) * Rj' * Ri;
@@ -1132,6 +1199,7 @@ function [Ji,Jj,Jb] = getIMUJac(resR,Ri,Rj,Vi,Vj,Pi,Pj,bgdi,JdelRij_bg,JdelVij_b
 end
 
 function [Jrv,Jbg,Js] = getWSSJac(Ri,Vi,Si,wi,bgi,bgdi,L)
+% WSS Jacobians
     Jrv = zeros(3,6); % Horizontally Augmented for R and V
     Jrv(:,1:3) = 1/Si * skew(Ri' * Vi);
     Jrv(:,4:6) = 1/Si * Ri';
@@ -1140,6 +1208,21 @@ function [Jrv,Jbg,Js] = getWSSJac(Ri,Vi,Si,wi,bgi,bgdi,L)
     Js = -1/Si^2 * (Ri' * Vi - skew(wi - bgi - bgdi) * L);
 %     Jl = -1/Si * skew(wi - bgi - bgdi);
 %     Jl = Jl(:,1); % Only take the longitudinal lever arm as the optimization variable
+end
+
+function [Jri,Jpi,JLij,JLijp1,Jrip1,Jpip1,JLip1j] = getMEJac(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,j)
+% Lane Measurement Jacobian
+    A = Ri' * (Pip1 + Rip1 * Lip1j - Pi);
+    B = eye(3) + 1/10 * [Lij - Lijp1 zeros(3,2)];
+    K = [1/10, 0, 0];
+
+    Jri = skew(A) * B;
+    Jpi = -B;
+    JLij = K * A - j;
+    JLijp1= j-1 - K * A;
+    Jrip1 = -Ri' * Rip1 * skew(Lip1j) * B;
+    Jpip1 = Ri' * Rip1 * B;
+    JLip1j = Jpip1;
 end
 
 function h_dl = ComputeDogLeg(h_gn,h_gd,tr_rad)
