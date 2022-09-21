@@ -68,10 +68,10 @@ options.Algorithm = 'GN';
 
 lane_.prev_num = 6; % Set preview number
 %% INS + GNSS Fusion 
-% sol = struct();
-% sol.basic = optimizer(imu_,gnss_,lane_,can_,bias_,t_,covs_,'basic',options);
-% sol.basic.optimize();
-% sol.basic.visualize();
+sol = struct();
+sol.basic = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'basic',options);
+sol.basic.optimize();
+sol.basic.visualize();
 
 %% INS + GNSS + WSS Fusion
 % sol = struct();
@@ -81,7 +81,7 @@ lane_.prev_num = 6; % Set preview number
 
 %% INS + GNSS + WSS + Lane Fusion
 
-sol = struct();
-sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'full',options);
-% sol.partial.optimize();
-sol.partial.visualize();
+% sol = struct();
+% sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'full',options);
+% % sol.partial.optimize();
+% sol.partial.visualize();
