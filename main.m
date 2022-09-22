@@ -68,6 +68,7 @@ options.TR.gamma2 = 2;
 options.TR.thres = 1e-6; % Trust Region Radius Threshold
 
 lane_.prev_num = 6; % Set preview number
+
 %% INS + GNSS Fusion 
 % sol = struct();
 % sol.basic = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'basic',options);
