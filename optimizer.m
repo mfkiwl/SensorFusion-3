@@ -99,7 +99,7 @@ classdef optimizer < handle
         %% Optimize
         function obj = optimize(obj)
             
-            % Optimize Sparse Nonlinear Least Squares in Batch Manner                     
+            % Solve Sparse Nonlinear Least Squares in Batch Manner                     
 
             disp('[Optimization Starts...]')
 
@@ -109,6 +109,9 @@ classdef optimizer < handle
                 obj.opt.x0 = zeros(15*n,1);
             elseif strcmp(obj.mode,'partial')
                 obj.opt.x0 = zeros(16*n,1);
+            elseif strcmp(obj.mode,'full')                
+                num = length(obj.lane.FactorValidIdxs);                
+                obj.opt.x0 = zeros(16*n + 2*num*2*obj.lane.prev_num,1);
             end
             
             % Run optimization depending on algorithm options
@@ -827,7 +830,7 @@ classdef optimizer < handle
                             right = obj.states{i}.right(2:3,j); % Only take y z coordinates
                             
                             left_prior = [obj.lane.ly(lane_idx,j);obj.lane.lz(lane_idx,j)];
-                            right_prior = [obj.lane.ry(lane_idx,k);obj.lane.rz(lane_idx,j)];
+                            right_prior = [obj.lane.ry(lane_idx,j);obj.lane.rz(lane_idx,j)];
 
                             left_cov = diag([obj.lane.lystd(lane_idx,j)^2,obj.lane.lzstd(lane_idx,j)^2]);
                             right_cov = diag([obj.lane.rystd(lane_idx,j)^2,obj.lane.rzstd(lane_idx,j)^2]);
@@ -862,14 +865,16 @@ classdef optimizer < handle
 %             blk_height = 15 * (n-1);
             grav = [0;0;-9.81];
 
-            if strcmp(obj.mode,'partial')
+            if ~strcmp(obj.mode,'basic')
                 blk_width = blk_width + n;
                 I_s = zeros(1,2*(n-1)); J_s = I_s; V_s = I_s;
                 s_cov = obj.covs.imu.ScaleFactorNoise;
                 WSF_res = zeros(n-1,1);
 
-            elseif strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
-                % Add prev_num states
+                if strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
+                    num = length(obj.lane.FactorValidIdxs);
+                    blk_width = 16*n + 2*num*2*obj.lane.prev_num;
+                end
             end
             
             I_v = zeros(1,9*24*(n-1)); J_v = I_v; V_v = I_v;
@@ -939,7 +944,7 @@ classdef optimizer < handle
                 J_b((12*(i-1)+1):12*i) = [J_b1 J_b2 J_b3 J_b4];
                 V_b((12*(i-1)+1):12*i) = [V_b1 V_b2 V_b3 V_b4];
                 
-                if strcmp(obj.mode,'partial')
+                if ~strcmp(obj.mode,'basic')
                     % WSF residual and jacobian
                     Si = obj.states{i}.WSF; Sj = obj.states{i+1}.WSF;
                     resS = Sj - Si;
@@ -955,7 +960,7 @@ classdef optimizer < handle
             MM_res = [Veh_res;Bias_res];
             MM_jac = [Veh_jac;Bias_jac];
             
-            if strcmp(obj.mode,'partial')
+            if ~strcmp(obj.mode,'basic')
                 % Augment WSF residual and jacobian
                 WSF_jac = sparse(I_s,J_s,V_s,n-1,blk_width);
                 
@@ -976,7 +981,8 @@ classdef optimizer < handle
             if strcmp(obj.mode,'partial')
                 blk_width = blk_width + m;
             elseif strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
-                % Add prev_num states
+                num = length(obj.lane.FactorValidIdxs);
+                blk_width = 16*m + 2*num*2*obj.lane.prev_num;
             end
             blk_height = 3*n;
             GNSS_res = zeros(blk_height,1);
@@ -1011,7 +1017,8 @@ classdef optimizer < handle
                 blk_width = 16*n;
                 
                 if strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
-                    % Add prev_num states
+                    num = length(obj.lane.FactorValidIdxs);
+                    blk_width = 16*n + 2*num*2*obj.lane.prev_num;
                 end
                 
                 L = obj.params;
@@ -1091,7 +1098,7 @@ classdef optimizer < handle
                     idx1 = obj.lane.FactorValidIdxs(i);
                     idx2 = obj.lane.FactorValidIdxs(i+1);
                     lane_idx1 = obj.lane.state_idxs(idx1);
-                    lane_idx2 = obj.lane.state_idxs(idx2);
+%                     lane_idx2 = obj.lane.state_idxs(idx2);
 
                     if idx2 - idx1 == 1 % Two frames are consecutive
                         Ri = obj.states{idx1}.R;
@@ -1101,8 +1108,9 @@ classdef optimizer < handle
                         
                         Lij_adder = 16*n+2*obj.lane.prev_num*(idx1-1);
                         Lip1j_adder = 16*n+2*obj.lane.prev_num*(idx2-1);
-                        % Rij_adder
-                        % Rip1j_adder
+                        Rij_adder = 16*n+num*2*obj.lane.prev_num+2*obj.lane.prev_num*(idx1-1);
+                        Rip1j_adder = 16*n+num*2*obj.lane.prev_num+2*obj.lane.prev_num*(idx2-1);
+                        
                         for j=1:obj.lane.prev_num-1
                             % Since Extrapolation will cause serious
                             % instability, last preview point is excluded
@@ -1150,8 +1158,38 @@ classdef optimizer < handle
                             Rijp1 = obj.states{idx1}.right(:,j+1);
                             Rip1j = obj.states{idx2}.right(:,j);
                             
+                            A_r = Ri' * (Pip1 + Rip1 * Rip1j - Pi);
+
                             % Right Lane Residual
+                            stdRy = (j - K * Ri' * (Pip1 + Rip1 * Rip1j - Pi)) * obj.lane.rystd(lane_idx1,j) + ...
+                                    (K * Ri' * (Pip1 + Rip1 * Rip1j - Pi) - (j-1)) * obj.lane.rystd(lane_idx1,j+1);
+                            stdRz = (j - K * Ri' * (Pip1 + Rip1 * Rip1j - Pi)) * obj.lane.rzstd(lane_idx1,j) + ...
+                                    (K * Ri' * (Pip1 + Rip1 * Rip1j - Pi) - (j-1)) * obj.lane.rzstd(lane_idx1,j+1);
+                            
+                            covR = diag([stdRy^2,stdRz^2]);
+                            
+                            resR_ = -j * Rij + (j-1) * Rijp1 + A_r + (K * A_r) * (Rij - Rijp1); 
+                            resR(2*cnt-1:2*cnt) = InvMahalanobis(resR_(2:3),covR);
+
                             % Right Lane Jacobian
+                            [JriR,JpiR,JRijR,JRijp1R,Jrip1R,Jpip1R,JRip1jR] = obj.getMEJac(Ri,Rip1,Pi,Pip1,Rij,Rijp1,Rip1j,j);
+                            [I_riR,J_riR,V_riR] = sparseFormat(2*cnt-1:2*cnt,9*(idx1-1)+1:9*(idx1-1)+3,InvMahalanobis(JriR(2:3,:),covR));
+                            [I_piR,J_piR,V_piR] = sparseFormat(2*cnt-1:2*cnt,9*(idx1-1)+7:9*(idx1-1)+9,InvMahalanobis(JpiR(2:3,:),covR));
+                            [I_rip1R,J_rip1R,V_rip1R] = sparseFormat(2*cnt-1:2*cnt,9*(idx2-1)+1:9*(idx2-1)+3,InvMahalanobis(Jrip1R(2:3,:),covR));
+                            [I_pip1R,J_pip1R,V_pip1R] = sparseFormat(2*cnt-1:2*cnt,9*(idx2-1)+7:9*(idx2-1)+9,InvMahalanobis(Jpip1R(2:3,:),covR));
+                            [I_RijR,J_RijR,V_RijR] = sparseFormat(2*cnt-1:2*cnt,Rij_adder+2*j-1:Rij_adder+2*j,InvMahalanobis(JRijR(2:3,:),covR));
+                            [I_Rijp1R,J_Rijp1R,V_Rijp1R] = sparseFormat(2*cnt-1:2*cnt,Rij_adder+2*j+1:Rij_adder+2*j+2,InvMahalanobis(JRijp1R(2:3,:),covR));
+                            [I_Rip1jR,J_Rip1jR,V_Rip1jR] = sparseFormat(2*cnt-1:2*cnt,Rip1j_adder+2*j-1:Rip1j_adder+2*j,InvMahalanobis(JRip1jR(2:3,:),covR));
+                            
+                            I_R(36*(obj.lane.prev_num-1)*(cnt2-1)+36*(j-1)+1:36*(obj.lane.prev_num-1)*(cnt2-1)+36*j) = ...
+                                [I_riR,I_piR,I_rip1R,I_pip1R,I_RijR,I_Rijp1R,I_Rip1jR];
+
+                            J_R(36*(obj.lane.prev_num-1)*(cnt2-1)+36*(j-1)+1:36*(obj.lane.prev_num-1)*(cnt2-1)+36*j) = ...
+                                [J_riR,J_piR,J_rip1R,J_pip1R,J_RijR,J_Rijp1R,J_Rip1jR];
+                            
+                            V_R(36*(obj.lane.prev_num-1)*(cnt2-1)+36*(j-1)+1:36*(obj.lane.prev_num-1)*(cnt2-1)+36*j) = ...
+                                [V_riR,V_piR,V_rip1R,V_pip1R,V_RijR,V_Rijp1R,V_Rip1jR];
+
 
                             cnt = cnt + 1;
                         end
@@ -1178,13 +1216,14 @@ classdef optimizer < handle
             obj.retractStates(state_delta);
             obj.retractBias(bias_ddelta,mode);
             
-            if strcmp(obj.mode,'partial')
+            if ~strcmp(obj.mode,'basic')
                 wsf_delta = delta(15*n+1:16*n);
                 obj.retractWSF(wsf_delta);
                 
-            elseif strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
-                % Need to develop
-                error("To be done")
+                if strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
+                    % Need to develop
+                    error("To be done")
+                end
             end
             
         end
@@ -1221,14 +1260,19 @@ classdef optimizer < handle
                 
                 % Compare with threshold and update if needed
                 flag = false;
-
-                if strcmp(mode,'final')
+            
+                if strcmp(mode,'final') 
+                   % After finishing optimization, all delta terms are
+                   % added to the original bias variables
                    bg_ = obj.bias{i}.bg + new_bgd;
                    bgd_ = zeros(3,1);
                    ba_ = obj.bias{i}.ba + new_bad;
                    bad_ = zeros(3,1);
 
                 elseif strcmp(mode,'normal')
+                    % If delta bias values are larger than threshold,
+                    % perform repropagation (IMU)
+                    % Else, accumulate delta value
                     if norm(new_bgd) > obj.bgd_thres
                         bg_ = obj.bias{i}.bg + new_bgd;
                         bgd_ = zeros(3,1);
