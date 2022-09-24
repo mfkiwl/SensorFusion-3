@@ -76,14 +76,17 @@ lane_.prev_num = 6; % Set preview number
 % sol.basic.visualize();
 
 %% INS + GNSS + WSS Fusion
-% sol = struct();
-% sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
-% sol.partial.optimize();
-% sol.partial.visualize();
+sol = struct();
+sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
+sol.partial.optimize();
+%%
+sol.partial.visualize();
 
 %% INS + GNSS + WSS + Lane Fusion
 
-sol = struct();
-sol.full = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'full',options);
-sol.full.optimize();
-sol.full.visualize();
+% sol = struct();
+% sol.full = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
+% sol.full.optimize();
+% sol.full.mode = 'full';
+% sol.full.optimize();
+% sol.full.visualize();

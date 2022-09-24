@@ -142,20 +142,32 @@ classdef optimizer < handle
                 
                 Left_ = []; Right_ = [];
                 % Transform lane points to world frame
+                
+                 for j=1:obj.lane.prev_num
+                    left_ = obj.states{i}.left(:,j);
+                    right_ = obj.states{i}.right(:,j);
 
-                if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
-                    for j=1:obj.lane.prev_num
-                        left_ = obj.states{i}.left(:,j);
-                        right_ = obj.states{i}.right(:,j);
-    
-                        Left_ = [Left_ P_ + R_ * left_];
-                        Right_ = [Right_ P_ + R_ * right_];
-    
-                        
-                    end
-                    left = [left {Left_}];
-                    right = [right {Right_}];
+                    Left_ = [Left_ P_ + R_ * left_];
+                    Right_ = [Right_ P_ + R_ * right_];
+
+                    
                 end
+                left = [left {Left_}];
+                right = [right {Right_}];
+
+%                 if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
+%                     for j=1:obj.lane.prev_num
+%                         left_ = obj.states{i}.left(:,j);
+%                         right_ = obj.states{i}.right(:,j);
+%     
+%                         Left_ = [Left_ P_ + R_ * left_];
+%                         Right_ = [Right_ P_ + R_ * right_];
+%     
+%                         
+%                     end
+%                     left = [left {Left_}];
+%                     right = [right {Right_}];
+%                 end
                 
                 R = [R dcm2rpy(R_)];
                 V = [V V_]; P = [P P_];
@@ -185,13 +197,18 @@ classdef optimizer < handle
             p_est = plot(P(1,:),P(2,:),'r.');
             p_gnss = plot(gnss_pos(:,1),gnss_pos(:,2),'b.');
             
-            if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
-                for i=1:n
-                    left_ = left{i}; right_ = right{i};
-                    plot(left_(1,:),left_(2,:));
-                    plot(right_(1,:),right_(2,:));
-                end
+            for i=1:n
+                left_ = left{i}; right_ = right{i};
+                plot(left_(1,1),left_(2,1),'cx');
+                plot(right_(1,1),right_(2,1),'mx');
             end
+%             if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
+%                 for i=1:n
+%                     left_ = left{i}; right_ = right{i};
+%                     plot(left_(1,:),left_(2,:));
+%                     plot(right_(1,:),right_(2,:));
+%                 end
+%             end
 
             xlabel('Global X'); ylabel('Global Y');
             title('Optimized Trajectory 3D Comparison')
@@ -743,9 +760,6 @@ classdef optimizer < handle
             [WSS_res,WSS_jac] = obj.CreateWSSBlock();
             [ME_res,ME_jac] = obj.CreateMEBlock();
             
-            figure(1);
-            spy(ME_jac);
-            error('1')
             res = vertcat(Pr_res,MM_res,GNSS_res,WSS_res,ME_res);
             jac = vertcat(Pr_jac,MM_jac,GNSS_jac,WSS_jac,ME_jac);            
         end
@@ -808,7 +822,8 @@ classdef optimizer < handle
             J(9*3+1:9*3+6) = 9*n+1:9*n+6;
             V(9*3+1:9*3+6) = [V_1b V_2b];
             
-            WSS_res = []; Lane_res = [];
+            WSS_res = []; 
+            Left_res = []; Right_res = [];
             Left_jac = []; Right_jac = [];
             if ~strcmp(obj.mode,'basic')
                 % WSF Prior
@@ -823,56 +838,56 @@ classdef optimizer < handle
 
                 if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
                     % Lane Prior: Need to Check!
-                    Left_res = zeros(num * 2 * obj.lane.prev_num,1);
-                    Right_res = zeros(num * 2 * obj.lane.prev_num,1);
-                    Lane_res = zeros(2 * num * 2 * obj.lane.prev_num,1);
+                    Left_res = zeros(num * 3 * obj.lane.prev_num,1);
+                    Right_res = zeros(num * 3 * obj.lane.prev_num,1);
                     
-                    I_L = zeros(1,num*2*obj.lane.prev_num);
+                    I_L = zeros(1,num*3*obj.lane.prev_num);
                     J_L = I_L; V_L = I_L;
                     I_R = I_L; J_R = I_L; V_R = I_L;
 
-                    for i=1:length(obj.lane.FactorValidIdxs)
+                    for i=1:num
                         state_idx = obj.lane.FactorValidIdxs(i);
                         lane_idx = obj.lane.state_idxs(state_idx);
                         
-                        Adder = 2*obj.lane.prev_num*(i-1);
-                        Adder2 = 2*obj.lane.prev_num*(state_idx-1);
-                        for j=1:obj.lane.prev_num                                
-                            left = obj.states{state_idx}.left(2:3,j); % Only take y z coordinates
-                            right = obj.states{state_idx}.right(2:3,j); % Only take y z coordinates
+                        Adder = 3*obj.lane.prev_num*(i-1);    
+                        Adder2 = Adder + 3*obj.lane.prev_num*num;
+                        for j=1:obj.lane.prev_num    
                             
-                            left_prior = [obj.lane.ly(lane_idx,j);obj.lane.lz(lane_idx,j)];
-                            right_prior = [obj.lane.ry(lane_idx,j);obj.lane.rz(lane_idx,j)];
+                            left = obj.states{state_idx}.left(:,j); % Only take y z coordinates
+                            right = obj.states{state_idx}.right(:,j); % Only take y z coordinates
+                            
+                            left_prior = [10*(j-1);obj.lane.ly(lane_idx,j);obj.lane.lz(lane_idx,j)];
+                            right_prior = [10*(j-1);obj.lane.ry(lane_idx,j);obj.lane.rz(lane_idx,j)];
 
-                            left_cov = diag([obj.lane.lystd(lane_idx,j)^2,obj.lane.lzstd(lane_idx,j)^2]);
-                            right_cov = diag([obj.lane.rystd(lane_idx,j)^2,obj.lane.rzstd(lane_idx,j)^2]);
+                            left_cov = diag([1e-10,obj.lane.lystd(lane_idx,j)^2,obj.lane.lzstd(lane_idx,j)^2]);
+                            right_cov = diag([1e-10,obj.lane.rystd(lane_idx,j)^2,obj.lane.rzstd(lane_idx,j)^2]);
                             
                             % Residual
-                            Left_res(Adder+2*(j-1)+1:Adder+2*(j-1)+2) = InvMahalanobis(left - left_prior,left_cov);
-                            Right_res(Adder+2*(j-1)+1:Adder+2*(j-1)+2) = InvMahalanobis(right - right_prior,right_cov);
+                            Left_res(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = InvMahalanobis(left - left_prior,left_cov);
+                            Right_res(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = InvMahalanobis(right - right_prior,right_cov);
                             
                             % Jacobian
                             % Left Lane
 
-                            I_L(Adder+2*(j-1)+1:Adder+2*(j-1)+2) = [Adder+2*(j-1)+1,Adder+2*(j-1)+2];
-                            J_L(Adder+2*(j-1)+1:Adder+2*(j-1)+2) = [16*n+Adder2+2*(j-1)+1,16*n+Adder2+2*(j-1)+2];
-                            V_L(Adder+2*(j-1)+1:Adder+2*(j-1)+2) = diag(InvMahalanobis(eye(2),left_cov));
+                            I_L(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = [Adder+3*(j-1)+1,Adder+3*(j-1)+2];
+                            J_L(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = [16*n+Adder+3*(j-1)+1,16*n+Adder+3*(j-1)+2];
+                            V_L(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = diag(InvMahalanobis(eye(3),left_cov));
 
                             % Right Lane
-                            I_R(Adder+2*(j-1)+1:Adder+2*(j-1)+2) = [Adder+2*(j-1)+1,Adder+2*(j-1)+2];
-                            J_R(Adder+2*(j-1)+1:Adder+2*(j-1)+2) = [16*n+Adder2+2*(j-1)+1,16*n+Adder2+2*(j-1)+2];
-                            V_R(Adder+2*(j-1)+1:Adder+2*(j-1)+2) = diag(InvMahalanobis(eye(2),right_cov));
+                            I_R(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = [Adder+3*(j-1)+1,Adder+3*(j-1)+2];
+                            J_R(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = [16*n+Adder2+3*(j-1)+1,16*n+Adder2+3*(j-1)+2];
+                            V_R(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = diag(InvMahalanobis(eye(3),right_cov));
                         end
                     end
 
-                    Left_jac = sparse(I_L,J_L,V_L,num * 2 * obj.lane.prev_num,blk_width);
-                    Right_jac = sparse(I_R,J_R,V_R,num * 2 * obj.lane.prev_num,blk_width);
+                    Left_jac = sparse(I_L,J_L,V_L,num * 3 * obj.lane.prev_num,blk_width);
+                    Right_jac = sparse(I_R,J_R,V_R,num * 3 * obj.lane.prev_num,blk_width);
                 end
             end
 %             disp(size(sparse(I,J,V,blk_height,blk_width)))
 %             disp(size(Left_jac))
 %             disp(size(Right_jac))
-            Pr_res = [Veh_res; Bias_res; WSS_res;Lane_res];
+            Pr_res = [Veh_res; Bias_res; WSS_res;Left_res;Right_res];
             Pr_jac = [sparse(I,J,V,blk_height,blk_width);Left_jac;Right_jac];
         end
         
@@ -1074,7 +1089,7 @@ classdef optimizer < handle
             end
         end
         
-        %% Lane Measurement Residual and Jacobian
+        %% Naive Lane Measurement Residual and Jacobian
         function [ME_res,ME_jac] = CreateMEBlock(obj)
             % Version 1: Naive Model (No lane merging)
             % 3 Dimensional Model, but only y, z coords are optimization
@@ -1126,14 +1141,14 @@ classdef optimizer < handle
                         
                         Lij_adder = 16*n+2*obj.lane.prev_num*(i-1);
                         Lip1j_adder = 16*n+2*obj.lane.prev_num*(i);
-                        Rij_adder = 16*n+num*2*obj.lane.prev_num+2*obj.lane.prev_num*(i-1);
-                        Rip1j_adder = 16*n+num*2*obj.lane.prev_num+2*obj.lane.prev_num*(i);
+                        Rij_adder = 16*n+2*obj.lane.prev_num*num+2*obj.lane.prev_num*(i-1);
+                        Rip1j_adder = 16*n+2*obj.lane.prev_num*num+2*obj.lane.prev_num*(i);
                         
                         for j=1:obj.lane.prev_num-1
                             % Since Extrapolation will cause serious
                             % instability, last preview point is excluded
                             % * Reason why curvature factor is needed
-                            
+%                             disp([idx1, j])
                             % Left Lane
                             Lij = obj.states{idx1}.left(:,j);
                             Lijp1 = obj.states{idx1}.left(:,j+1);
@@ -1149,8 +1164,10 @@ classdef optimizer < handle
                                     (K * (Ri' * (Pip1 + Rip1 * Lip1j - Pi)) - (j-1)) * obj.lane.lzstd(lane_idx1,j+1);
                             
                             covL = diag([stdLy^2,stdLz^2]);
-                            
+%                             disp(covL)
+
                             resL_ = -j * Lij + (j-1) * Lijp1 + A_l + (K * A_l) * (Lij - Lijp1); 
+%                             disp(resL_)
                             resL(2*cnt-1:2*cnt) = InvMahalanobis(resL_(2:3),covL);
                             
                             % Left Lane Jacobian
@@ -1186,8 +1203,10 @@ classdef optimizer < handle
                                     (K * (Ri' * (Pip1 + Rip1 * Rip1j - Pi)) - (j-1)) * obj.lane.rzstd(lane_idx1,j+1);
                             
                             covR = diag([stdRy^2,stdRz^2]);
+%                             disp([stdRy obj.lane.rystd(lane_idx1,j) obj.lane.rystd(lane_idx1,j+1)])
                             
                             resR_ = -j * Rij + (j-1) * Rijp1 + A_r + (K * A_r) * (Rij - Rijp1); 
+%                             disp(resR_)
                             resR(2*cnt-1:2*cnt) = InvMahalanobis(resR_(2:3),covR);
 
                             % Right Lane Jacobian
@@ -1226,6 +1245,11 @@ classdef optimizer < handle
                 ME_jac = [sparse(I_L,J_L,V_L,blk_height,blk_width);sparse(I_R,J_R,V_R,blk_height,blk_width)];
             end
         end
+        
+        %% Lane Merging based Measurement Residual and Jacobian
+        function [LA_res,LA_jac] = CreateLABlock(obj)
+            
+        end
 
         %% Retraction
         function obj = retract(obj,delta,mode)
@@ -1243,8 +1267,8 @@ classdef optimizer < handle
                 
                 if strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
                     num = length(obj.lane.FactorValidIdxs);
-                    left_delta = delta(16*n+1:16*n+num*2*obj.lane.prev_num);
-                    right_delta = delta(16*n+num*2*obj.lane.prev_num+1:16*n+2*num*2*obj.lane.prev_num);
+                    left_delta = delta(16*n+1:16*n+num*3*obj.lane.prev_num);
+                    right_delta = delta(16*n+num*3*obj.lane.prev_num+1:16*n+3*num*2*obj.lane.prev_num);
                     obj.retractLane(left_delta,right_delta);
                 end
             end
@@ -1286,7 +1310,8 @@ classdef optimizer < handle
             
                 if strcmp(mode,'final') 
                    % After finishing optimization, all delta terms are
-                   % added to the original bias variables
+                   % transferred to the original bias variables
+                   % flush delta values!
                    bg_ = obj.bias{i}.bg + new_bgd;
                    bgd_ = zeros(3,1);
                    ba_ = obj.bias{i}.ba + new_bad;
@@ -1349,11 +1374,11 @@ classdef optimizer < handle
             num = length(obj.lane.FactorValidIdxs);
             for i=1:num
                 state_idx = obj.lane.FactorValidIdxs(i);
-                left_sample = reshape(left_delta(2*(i-1)*obj.lane.prev_num+1:2*i*obj.lane.prev_num),2,obj.lane.prev_num);
-                right_sample = reshape(right_delta(2*(i-1)*obj.lane.prev_num+1:2*i*obj.lane.prev_num),2,obj.lane.prev_num);
+                left_sample = reshape(left_delta(3*(i-1)*obj.lane.prev_num+1:3*i*obj.lane.prev_num),3,obj.lane.prev_num);
+                right_sample = reshape(right_delta(3*(i-1)*obj.lane.prev_num+1:3*i*obj.lane.prev_num),3,obj.lane.prev_num);
 
-                obj.states{state_idx}.left(2:3,:) = obj.states{state_idx}.left(2:3,:) + left_sample;
-                obj.states{state_idx}.right(2:3,:) = obj.states{state_idx}.right(2:3,:) + right_sample;
+                obj.states{state_idx}.left = obj.states{state_idx}.left + left_sample;
+                obj.states{state_idx}.right = obj.states{state_idx}.right + right_sample;
             end
         end
 
