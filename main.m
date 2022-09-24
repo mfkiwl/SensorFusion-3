@@ -79,7 +79,6 @@ lane_.prev_num = 6; % Set preview number
 sol = struct();
 sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
 sol.partial.optimize();
-%%
 sol.partial.visualize();
 
 %% INS + GNSS + WSS + Lane Fusion
