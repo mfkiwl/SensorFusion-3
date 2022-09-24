@@ -14,7 +14,7 @@ Vehicle attitude, trajectory and lane map reconstruction for sparse feature, GNS
 - Modify 'dataloader.py' to extract different raw data from other '.pkl' files
 
 ### Starting with extracted data
-* 'dataprocessor.m'
+#### 'dataprocessor.m'
 
 - After running 'dataloader.py', there will be various '.mat' format data files
 
@@ -24,7 +24,7 @@ Vehicle attitude, trajectory and lane map reconstruction for sparse feature, GNS
 
 - Finally, IMU readings are clustered for easier preintegration
 
-* 'optimizer.m'
+#### 'optimizer.m'
 
 - Running the remaining sections of 'main.m' will use 'optimizer.m', which is the main part of this research
 
