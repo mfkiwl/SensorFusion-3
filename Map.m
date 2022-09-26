@@ -106,6 +106,7 @@ classdef Map < handle
                         map_b = frameTransformation(R,P,map);  
                         xL = map_b.left(1,:);
                         xR = map_b.right(1,:);
+
                         for k=2:obj.lane.prev_num
                             idxL = find(xL > 10*(k-1) - 5 & xL < 10*(k-1) + 5); % may need to change value 5 to other valid values
                             idxR = find(xR > 10*(k-1) - 5 & xR < 10*(k-1) + 5);
@@ -126,7 +127,7 @@ classdef Map < handle
                                     Pt = obj.states{obj.getStateIdx(idxP,i)}.P;
 
                                     lane_idxP = obj.lane.state_idxs(obj.getStateIdx(idxP,i));
-                                    lane_idxN = obj.lane.staet_idxs(obj.getStateIdx(idxN,i));
+                                    lane_idxN = obj.lane.state_idxs(obj.getStateIdx(idxN,i));
                                     x_ = [xL(idxP) xL(idxN)];
                                     stdy_ = [obj.lane.lystd(lane_idxP,k) obj.lane.lystd(lane_idxN,k)];
                                     stdz_ = [obj.lane.lzstd(lane_idxP,k) obj.lane.lystd(lane_idxN,k)];
@@ -141,6 +142,7 @@ classdef Map < handle
                                     cov_inter = diag([stdy_inter^2,stdz_inter^2]);
 
                                     cand = struct();
+                                    cand.idxP = obj.getStateIdx(idxP,i);
                                     cand.meas = meas_inter;
                                     cand.cov = cov_inter;
                                     % Need to convert actual world frame
@@ -164,7 +166,7 @@ classdef Map < handle
                                     Pt = obj.states{obj.getStateIdx(idxP,i)}.P;
 
                                     lane_idxP = obj.lane.state_idxs(obj.getStateIdx(idxP,i));
-                                    lane_idxN = obj.lane.staet_idxs(obj.getStateIdx(idxN,i));
+                                    lane_idxN = obj.lane.state_idxs(obj.getStateIdx(idxN,i));
                                     x_ = [xR(idxP) xR(idxN)];
                                     stdy_ = [obj.lane.rystd(lane_idxP,k) obj.lane.rystd(lane_idxN,k)];
                                     stdz_ = [obj.lane.rzstd(lane_idxP,k) obj.lane.rystd(lane_idxN,k)];
@@ -179,6 +181,7 @@ classdef Map < handle
                                     cov_inter = diag([stdy_inter^2,stdz_inter^2]);
 
                                     cand = struct();
+                                    cand.idxP = obj.getStateIdx(idxP,i);
                                     cand.meas = meas_inter;
                                     cand.cov = cov_inter;
                                     cand.actual_meas = Rt' * (P + R * RIGHT(:,k) - Pt);
@@ -188,7 +191,15 @@ classdef Map < handle
 
                             % Verify candidates by performing Chi-Square
                             % Test. 
+                            [validityL,NL] = obj.ChiSquareTest(candL);
+                            [validityR,NR] = obj.ChiSquareTest(candR);
+
+                            % Find acceptable candidate from validity array
+                            validIdxL = obj.ProcValidity(validityL,NL);
+                            validIdxR = obj.ProcValidity(validityR,NR);
                             
+                            assocL(j-lb+1,k-1) = validIdxL;
+                            assocR(j-lb+1,k-1) = validIdxR;
                         end
                     end
                 end
@@ -218,10 +229,10 @@ classdef Map < handle
         end
         
         %% Perform Chi-Square Test for matching candidates
-        function validity = ChiSquareTest(cand)
+        function [validity,N] = ChiSquareTest(cand)
             n = length(cand);
             validity = false(1,n);
-            
+            N = zeros(1,n);
             % 99% Reliability for 2 DOF system
             thres = chi2inv(0.99,2); 
 
@@ -229,15 +240,35 @@ classdef Map < handle
                 act_meas = cand{i}.actual_meas(2:3);
                 meas = cand{i}.meas;
                 cov = cand{i}.cov;
-
-                N = (act_meas - meas) / cov * (act_meas - meas);
-                if N < thres
+                
+                % Compute Mahalanobis Distance
+                N(i) = (act_meas - meas) / cov * (act_meas - meas);
+                if N(i) < thres
                     % For acceptable error (within the reliability range),
                     % the validity of candidate is set to be true
                     validity(i) = true;
                 end
             end
         end
-
+        
+        %% Process Validity Array to find acceptable candidate
+        function valid_idx = ProcValidity(validity,N)
+            num_valid = length(find(validity));
+            
+            if num_valid == 0 || num_valid > 1
+                if num_valid == 0
+                    warning('No valid candidate, choosing match from smallest Mahalanobis distance')
+                    % Typically, there must be at least one match
+                    % There is something wrong if there is no match
+                    % * If using INS propagation results directly for
+                    % initial states, this may happen.
+                    % Using 2-phase optimization is recommended
+                end
+                [~,valid_idx] = min(N);
+            elseif num_valid == 1
+                valid_idx = find(validity);
+            end
+        end
+       
     end
 end
