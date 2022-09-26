@@ -357,6 +357,7 @@ classdef dataprocessor < handle
 
             % Find Lane Change time intervals
             LC_intvs = [];
+            LC_dirs = {};
             for i=2:length(obj.raw_data.can.t)
                 % LC Start
                 if (obj.raw_data.can.leftBlinker(i-1) == 0 && obj.raw_data.can.rightBlinker(i-1) == 0) && (obj.raw_data.can.leftBlinker(i) == 1 || obj.raw_data.can.rightBlinker(i) == 1)
@@ -365,9 +366,16 @@ classdef dataprocessor < handle
                 elseif (obj.raw_data.can.leftBlinker(i-1) == 1 || obj.raw_data.can.rightBlinker(i-1) == 1) && (obj.raw_data.can.leftBlinker(i) == 0 && obj.raw_data.can.rightBlinker(i) == 0)
                     t_ub = obj.raw_data.can.t(i);
                     LC_intvs = [LC_intvs; t_lb t_ub];
+
+                    if obj.raw_data.can.leftBlinker(i-1) == 1
+                        LC_dirs = [LC_dirs; {'left'}];
+                    elseif obj.raw_data.can.rightBlinker(i-1) == 1
+                        LC_dirs = [LC_dirs; {'right'}];
+                    end
                 end
             end
             obj.proc_data.can.LC_intvs = LC_intvs;
+            obj.proc_data.lane.LC_dirs = LC_dirs;
             
 %             figure(1);
 %             plot(obj.raw_data.can.t,obj.raw_data.can.leftBlinker,'r-'); hold on; grid on;

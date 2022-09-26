@@ -68,6 +68,7 @@ options.TR.gamma2 = 2;
 options.TR.thres = 1e-6; % Trust Region Radius Threshold
 
 lane_.prev_num = 6; % Set preview number
+lane_.prob_thres = 0.6; % Set lane prob threshold for discarding low-reliability data
 
 %% INS + GNSS Fusion 
 % sol = struct();
@@ -86,6 +87,6 @@ sol.partial.visualize();
 % sol = struct();
 % sol.full = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
 % sol.full.optimize();
-% sol.full.mode = 'full';
+% sol.full.update('2-phase') % Update mode to 2-phase
 % sol.full.optimize();
 % sol.full.visualize();

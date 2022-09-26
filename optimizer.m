@@ -47,10 +47,12 @@ classdef optimizer < handle
         % * P: Position vector in world local frame
         % ----- For 'partial' or above modes -----
         % * wsf: Wheel Scaling Factor(Ratio for considering effective radius)
-
+    
         bias = {} % bias variables saver
         bgd_thres = 1e-2; % Gyro bias repropagation threshold
         bad_thres = 1e-1; % Accel bias repropagation threshold
+
+        map % map variable for 'full' or '2-phase' mode
         opt = struct() % Optimized results
     end
     
@@ -96,6 +98,19 @@ classdef optimizer < handle
             % If mode is full, 2-phase, create initial value for lane
             % variables
         end
+        
+        %% Update Optimization Mode (for 2-phase)
+        function obj = update(obj,str)
+            if ismember(str,{'basic','partial','full','2-phase'})
+                obj.mode = str;
+            else
+                error('Mode Selection: basic, partial, full, 2-phase')
+            end
+            
+            if strcmp(obj.mode,'2-phase')
+                obj.map = Map(obj.states,obj.lane,obj.lane.prob_thres); % Create and initialize Map
+            end           
+        end
 
         %% Optimize
         function obj = optimize(obj)
@@ -110,9 +125,10 @@ classdef optimizer < handle
                 obj.opt.x0 = zeros(15*n,1);
             elseif strcmp(obj.mode,'partial')
                 obj.opt.x0 = zeros(16*n,1);
-            elseif strcmp(obj.mode,'full')                
+            elseif strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')                
                 num = length(obj.lane.FactorValidIdxs);                
                 obj.opt.x0 = zeros(16*n + 2*num*2*obj.lane.prev_num,1);
+
             end
             
             % Run optimization depending on algorithm options
@@ -126,7 +142,7 @@ classdef optimizer < handle
 
             
         end
-
+            
         %% Visualize
         function visualize(obj)
             n = length(obj.states);
@@ -279,7 +295,7 @@ classdef optimizer < handle
                 title('Optimized Wheel Speed Scaling Factor')
             end
         end
-
+        
     end
     
     %% Private Methods
