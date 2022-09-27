@@ -1,4 +1,9 @@
 classdef dataprocessor < handle
+% DATAPROCESSOR - Read partially processed data by python and extract
+% useful information or cluster data into usable format
+% Processed data will be used in 'optimizer.m'
+%
+% Implemented by JinHwan Jeon, 2022
     properties
         raw_data = struct()
         data = struct()

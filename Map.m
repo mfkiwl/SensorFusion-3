@@ -10,12 +10,16 @@ classdef Map < handle
     % --> Optimize one step with that information
     % 2. Update association using retracted states 
     % 3. Repeat until convergence
+    %
+    % Implemented by JinHwan Jeon, 2022
     
     properties (Access = public)
         states
         lane
         segments = {}
+        extended_segments = {}
         lane_prob_thres
+        assoc = {}
     end
 
     %% Public Methods
@@ -31,6 +35,11 @@ classdef Map < handle
 
             % Association
             obj.associate();
+
+            % Segment-wise Association
+            if size(obj.lane.FactorValidIntvs,1) > 1
+                % T.B.D
+            end
         end
 
         %% Map Update
@@ -56,7 +65,7 @@ classdef Map < handle
                 ub = obj.lane.FactorValidIntvs(i,2);
                 
                 % Except last state of the segment, add 0m previewed points
-                for j = lb:ub-1
+                for j = lb:ub
                     R = obj.states{j}.R;
                     p = obj.states{j}.p;
                     map.left = [map.left p + R * obj.states{j}.left(:,1)];
@@ -72,14 +81,17 @@ classdef Map < handle
                         map.will_be_matched = [map.will_be_matched true];
                     end
                 end
+                obj.segments = [obj.segments {map}];
+
+                % Create Extended Map using last timestep previewed points
                 
-                % For last state of the segment, add all previewed points
                 R = obj.states{ub}.R;
                 p = obj.states{ub}.p;
-                map.left = [map.left p + R * obj.states{ub}.left];
-                map.right = [map.right p + R * obj.states{ub}.right];
-
-                obj.segments = [obj.segments {map}];
+                ext_map = struct();
+                ext_map.left = p + R * obj.states{ub}.left(:,2:end);
+                ext_map.right = p + R * obj.states{ub}.right(:,2:end);
+                
+                obj.extended_segments = [obj.extended_segments {ext_map}];
             end
         end
         
@@ -88,16 +100,19 @@ classdef Map < handle
         % 
         function obj = associate(obj)
             n = size(obj.lane.FactorValidIntvs,1);
+            sampleXthres = 10; % may need to change threshold for valid interval sampling
             for i=1:n
-                map = obj.segments{i};
+                map = obj.MergeMap(obj.segments{i},obj.extended_segments{i});
                 lb = obj.lane.FactorValidIntvs(i,1);
                 ub = obj.lane.FactorValidIntvs(i,2); 
                 assocL = zeros(ub - lb,obj.lane.prev_num-1);
                 assocR = assocL;
                 
-
+                % Association for "normal" cases
                 for j=lb:ub-1
                     if map.will_be_matched(j)
+                        % Perform map matching only for states with good lane
+                        % detection reliability
                         R = obj.states{j}.R;
                         P = obj.states{j}.P;
                         LEFT = obj.states{j}.left;
@@ -108,8 +123,8 @@ classdef Map < handle
                         xR = map_b.right(1,:);
 
                         for k=2:obj.lane.prev_num
-                            idxL = find(xL > 10*(k-1) - 5 & xL < 10*(k-1) + 5); % may need to change value 5 to other valid values
-                            idxR = find(xR > 10*(k-1) - 5 & xR < 10*(k-1) + 5);
+                            idxL = find(xL > 10*(k-1) - sampleXthres & xL < 10*(k-1) + sampleXthres); 
+                            idxR = find(xR > 10*(k-1) - sampleXthres & xR < 10*(k-1) + sampleXthres);
                             
                             if isempty(idxL) || isempty(idxR)
                                 error('No valid idx after transformation...')
@@ -122,17 +137,23 @@ classdef Map < handle
                                     % If match candidate is found,
                                     % interpolate and find resample point.
                                     % There may be multiple candidates
+                                    
+                                    [state_idxP,preview_idxP] = obj.getStateIdx(idxP,i);
+                                    [state_idxN,preview_idxN] = obj.getStateIdx(idxN,i);
+                                    Rt = obj.states{state_idxP}.R;
+                                    Pt = obj.states{state_idxP}.P;
 
-                                    Rt = obj.states{obj.getStateIdx(idxP,i)}.R;
-                                    Pt = obj.states{obj.getStateIdx(idxP,i)}.P;
-
-                                    lane_idxP = obj.lane.state_idxs(obj.getStateIdx(idxP,i));
-                                    lane_idxN = obj.lane.state_idxs(obj.getStateIdx(idxN,i));
+                                    lane_idxP = obj.lane.state_idxs(state_idxP);
+                                    lane_idxN = obj.lane.state_idxs(state_idxN);
                                     x_ = [xL(idxP) xL(idxN)];
-                                    stdy_ = [obj.lane.lystd(lane_idxP,k) obj.lane.lystd(lane_idxN,k)];
-                                    stdz_ = [obj.lane.lzstd(lane_idxP,k) obj.lane.lystd(lane_idxN,k)];
-                                    y_ = [obj.lane.ly(lane_idxP,k) obj.lane.ly(lane_idxN,k)];
-                                    z_ = [obj.lane.lz(lane_idxP,k) obj.lane.lz(lane_idxN,k)];
+                                    stdy_ = [obj.lane.lystd(lane_idxP,preview_idxP),...
+                                             obj.lane.lystd(lane_idxN,preview_idxN)];
+                                    stdz_ = [obj.lane.lzstd(lane_idxP,preview_idxP),...
+                                             obj.lane.lystd(lane_idxN,preview_idxN)];
+                                    y_ = [obj.lane.ly(lane_idxP,preview_idxP),...
+                                          obj.lane.ly(lane_idxN,preview_idxN)];
+                                    z_ = [obj.lane.lz(lane_idxP,preview_idxP),...
+                                          obj.lane.lz(lane_idxN,preview_idxN)];
 
                                     stdy_inter = interp1(x_,stdy_,10*(k-1));
                                     stdz_inter = interp1(x_,stdz_,10*(k-1));
@@ -162,16 +183,22 @@ classdef Map < handle
                                     % interpolate and find resample point.
                                     % There may be multiple candidates
                                     
-                                    Rt = obj.states{obj.getStateIdx(idxP,i)}.R;
-                                    Pt = obj.states{obj.getStateIdx(idxP,i)}.P;
+                                    [state_idxP,preview_idxP] = obj.getStateIdx(idxP,i);
+                                    [state_idxN,preview_idxN] = obj.getStateIdx(idxN,i);
+                                    Rt = obj.states{state_idxP}.R;
+                                    Pt = obj.states{state_idxP}.P;
 
-                                    lane_idxP = obj.lane.state_idxs(obj.getStateIdx(idxP,i));
-                                    lane_idxN = obj.lane.state_idxs(obj.getStateIdx(idxN,i));
+                                    lane_idxP = obj.lane.state_idxs(state_idxP);
+                                    lane_idxN = obj.lane.state_idxs(state_idxN);
                                     x_ = [xR(idxP) xR(idxN)];
-                                    stdy_ = [obj.lane.rystd(lane_idxP,k) obj.lane.rystd(lane_idxN,k)];
-                                    stdz_ = [obj.lane.rzstd(lane_idxP,k) obj.lane.rystd(lane_idxN,k)];
-                                    y_ = [obj.lane.ry(lane_idxP,k) obj.lane.ry(lane_idxN,k)];
-                                    z_ = [obj.lane.rz(lane_idxP,k) obj.lane.rz(lane_idxN,k)];
+                                    stdy_ = [obj.lane.rystd(lane_idxP,preview_idxP),...
+                                             obj.lane.rystd(lane_idxN,preview_idxN)];
+                                    stdz_ = [obj.lane.rzstd(lane_idxP,preview_idxP),...
+                                             obj.lane.rystd(lane_idxN,preview_idxN)];
+                                    y_ = [obj.lane.ry(lane_idxP,preview_idxP),...
+                                          obj.lane.ry(lane_idxN,preview_idxN)];
+                                    z_ = [obj.lane.rz(lane_idxP,preview_idxP),...
+                                          obj.lane.rz(lane_idxN,preview_idxN)];
 
                                     stdy_inter = interp1(x_,stdy_,10*(k-1));
                                     stdz_inter = interp1(x_,stdz_,10*(k-1));
@@ -184,6 +211,9 @@ classdef Map < handle
                                     cand.idxP = obj.getStateIdx(idxP,i);
                                     cand.meas = meas_inter;
                                     cand.cov = cov_inter;
+                                    % Need to convert actual world frame
+                                    % lane point coords to matching frame
+
                                     cand.actual_meas = Rt' * (P + R * RIGHT(:,k) - Pt);
                                     candR = [candR {cand}];
                                 end                                
@@ -203,18 +233,31 @@ classdef Map < handle
                         end
                     end
                 end
-
-                % For last index
+                
+                % Save Association Matrix for one segment
+                assoc_ = struct();
+                assoc_.L = assocL;
+                assoc_.R = assocR;
+                obj.assoc = [obj.assoc {assoc_}];
             end
 
         end
         
         %% Get State number from map index and segment number
-        % Except for last state indices
-        function state_idx = getStateIdx(obj,map_idx,seg_idx)
+        function [state_idx,preview_idx] = getStateIdx(obj,map_idx,seg_idx)
             curr_seg_intv = obj.lane.FactorValidIntvs(seg_idx,1:2);
             bds = curr_seg_intv(1):curr_seg_intv(2);
-            state_idx = bds(map_idx);
+            
+            if map_idx > length(bds)
+                % Current matched point is part of the extended map
+                state_idx = bds(end);
+                preview_idx = map_idx - length(bds) + 1;
+            else
+                % Current matched point is part of the normal map
+                state_idx = bds(map_idx);
+                preview_idx = 1;
+            end
+            
         end
 
     end
@@ -262,7 +305,8 @@ classdef Map < handle
                     % There is something wrong if there is no match
                     % * If using INS propagation results directly for
                     % initial states, this may happen.
-                    % Using 2-phase optimization is recommended
+                    % Using 2-phase optimization is recommended to prevent
+                    % situations with 'no match '
                 end
                 [~,valid_idx] = min(N);
             elseif num_valid == 1
@@ -270,5 +314,12 @@ classdef Map < handle
             end
         end
        
+        %% Concatenate normal map segment and extended map segment
+        function conc_map = MergeMap(map,ext_map)
+            conc_map = struct();
+            conc_map.left = [map.left ext_map.left];
+            conc_map.right = [map.right ext_map.right];
+        end
+
     end
 end

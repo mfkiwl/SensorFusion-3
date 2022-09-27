@@ -567,6 +567,8 @@ classdef optimizer < handle
             %
             % Original paper provides 3 possible update methods for L-M 
             % parameter but only the first update method is implemented
+            % Levenberg-Marquardt Algorithm seems to be not an appropriate
+            % solver for large sparse optimization problems
 
             disp('[SNLS solver: Approximate Trust Region Method]')
             fprintf(' Iteration      f(x)        step        Lambda    Acceptance\n');
@@ -1264,7 +1266,7 @@ classdef optimizer < handle
         
         %% Lane Merging based Measurement Residual and Jacobian
         function [LA_res,LA_jac] = CreateLABlock(obj)
-            
+            % To be done
         end
 
         %% Retraction

@@ -1,3 +1,6 @@
+%% Main runner
+% Run this file from dataprocessing to optimization
+
 clear; close all; clc;
 %% Load Raw Data
 imu = load('imu.mat');
@@ -11,7 +14,8 @@ dataset = dataprocessor(imu,gnss,can,lane,snap);
 dataset.process();
 % dataset.visualize();
 
-%%
+%% Optimizer Options 
+
 imu_ = dataset.proc_data.imu;
 gnss_ = dataset.proc_data.gnss;
 lane_ = dataset.proc_data.lane;
