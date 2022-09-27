@@ -12,7 +12,38 @@ classdef Map < handle
     % 3. Repeat until convergence
     %
     % Implemented by JinHwan Jeon, 2022
+    %
     
+    % Found errors and fixing record
+    % 
+    % ----------------------------------------------------------------
+    % Issue 1: Wrong match with interpolated measurement and actual
+    % target match point : Fixed, simple implementation error
+    % 
+    % Issue 2: Mahalanobis distance too large even for small matching 
+    % error: The original implementation uses Mahalanobis normalized
+    % distance and a chi-square threshold (99%) to filter out only
+    % valid matches. But covariance of 0m previewed points are very
+    % small (high reliability), leading to huge mahalanobis normalized 
+    % distance even if physical matching error is small. This leads to
+    % filtering out almost all of the possible candidates, making this
+    % way of map-matching useless. 
+    % * Therefore thresholding term is deleted, and candidate with 
+    % smallest Mahalanobis normalized distance is picked as the correct 
+    % match directly, without any chi-square test
+    % (Maybe there should be some threshold for physical distance?)
+    % 
+    %
+    % ----------------------------------------------------------------
+    %
+    % To Be Done List
+    % 
+    % (1) Data Association for different map segments
+    % (2) Debugging
+    % (3) Application to optimization framework
+    % (4) Extension from (3): map update after each SNLS iteration 
+    % * Need to be careful of backtracking when using LM or TR algorithm
+
     properties (Access = public)
         states
         lane
@@ -20,6 +51,7 @@ classdef Map < handle
         extended_segments = {}
         lane_prob_thres
         assoc = {}
+        dummy = struct()
     end
 
     %% Public Methods
@@ -38,7 +70,7 @@ classdef Map < handle
 
         end
 
-        %% Map Update
+        %% Map Update -- To Be Done
         function obj = update(obj)
 
         end
@@ -92,13 +124,6 @@ classdef Map < handle
         end
         
         %% Lane Point data association 
-        % Currently Fixing errors
-        % 
-        % Issue 1: Wrong match with interpolated measurement and actual
-        % target match point. 
-        % 
-        %
-
         function obj = associate(obj)
             n = size(obj.lane.FactorValidIntvs,1);
             sampleXthres = 10; % may need to change threshold for valid interval sampling
@@ -111,25 +136,31 @@ classdef Map < handle
                 assocR = assocL;
                 assocRprev = assocLprev;
                 
-                % Association for "normal" cases
+                obj.dummy.will_be_matched = map.will_be_matched;
+                %  * Association for "normal" cases * 
+
                 for j=lb:ub-1
-                    if map.will_be_matched(j)
+                    if map.will_be_matched(j-lb+1)
                         % Perform map matching only for states with good lane
                         % detection reliability
                         R = obj.states{j}.R;
                         P = obj.states{j}.P;
                         LEFT = obj.states{j}.left;
                         RIGHT = obj.states{j}.right;
+
                         % Perform frame transformation w.r.t vehicle frame
                         map_b = obj.frameTransformation(R,P,map);  
                         xL = map_b.left(1,:);
                         xR = map_b.right(1,:);
+                        
+                        
+                        obj.dummy.xL = xL;
+                        obj.dummy.xR = xR;
 
                         for k=2:obj.lane.prev_num
                             idxL = find(xL > 10*(k-1) - sampleXthres & xL < 10*(k-1) + sampleXthres); 
                             idxR = find(xR > 10*(k-1) - sampleXthres & xR < 10*(k-1) + sampleXthres);
-                            disp(['Target State Idx: ', num2str(j)])
-                            disp(['Preview Number: ', num2str(k)])
+
                             if isempty(idxL) || isempty(idxR)
                                 error('No valid idx after transformation...')
                             end
@@ -140,15 +171,10 @@ classdef Map < handle
                                 if xL(idxP) < 10*(k-1) && xL(idxN) >= 10*(k-1)
                                     % If match candidate is found,
                                     % interpolate and find resample point.
-                                    % There may be multiple candidates
-                                    
-                                    disp([xL(idxP), xL(idxN)])
+                                    % There may be multiple candidates                                   
 
                                     [state_idxP,preview_idxP] = obj.getStateIdx(idxP,i);
                                     [state_idxN,preview_idxN] = obj.getStateIdx(idxN,i);
-
-                                    disp([state_idxP,preview_idxP])
-                                    disp([state_idxN,preview_idxN])
 
                                     Rt = obj.states{state_idxP}.R;
                                     Pt = obj.states{state_idxP}.P;
@@ -180,10 +206,7 @@ classdef Map < handle
                                     % lane point coords to matching frame
 
                                     cand.actual_meas = Rt' * (P + R * LEFT(:,k) - Pt);
-                                    candL = [candL {cand}];
-                                                    
-                                    disp(['Interpolated Measurement: ', num2str(cand.meas')])
-                                    disp(['Target Match Point: ', num2str(cand.actual_meas')])
+                                    candL = [candL {cand}];                                                    
                                 end                                
                             end
 
@@ -232,16 +255,11 @@ classdef Map < handle
                                 end                                
                             end
 
-                            % Verify candidates by performing Chi-Square
-                            % Test. 
-                            [validityL,NL] = obj.ChiSquareTest(candL);
-                            [validityR,NR] = obj.ChiSquareTest(candR);
-
-                            % Find acceptable candidate from validity array
-                            % output valid index is the index of best
-                            % candidate
-                            validIdxL = obj.ProcValidity(validityL,NL);
-                            validIdxR = obj.ProcValidity(validityR,NR);
+                            % Verify candidates by computing Mahalanobis
+                            % normalized distance with interpolated
+                            % covariance matrix
+                            validIdxL = obj.getValidCandIdx(candL);
+                            validIdxR = obj.getValidCandIdx(candR);
                             
                             bestIdxL = candL{validIdxL}.idxP;
                             bestIdxL_prev = candL{validIdxL}.prev_idx;
@@ -254,8 +272,6 @@ classdef Map < handle
                             assocR(j-lb+1,k-1) = bestIdxR;
                             assocRprev(j-lb+1,k-1) = bestIdxR_prev;
                         end
-
-                        error('1')
                     end
                 end
                 
@@ -267,7 +283,8 @@ classdef Map < handle
                 assoc_.Rprev = assocRprev;
                 obj.assoc = [obj.assoc {assoc_}];
 
-                % Data Association for Extended Map Matching
+                % * Data Association for Extended Map Matching * 
+                % Map-matching for different map segments
                 if i < n
                     
                 
@@ -300,51 +317,28 @@ classdef Map < handle
         %% Convert map points into vehicle frame
         function map_b = frameTransformation(R,p,map)
             map_b = struct();
-            map_b.left = R' * map.left - p;
-            map_b.right = R' * map.right - p;
+            map_b.left = R' * (map.left - p);
+            map_b.right = R' * (map.right - p);
         end
         
         %% Perform Chi-Square Test for matching candidates
-        function [validity,N] = ChiSquareTest(cand)
+        function idx = getValidCandIdx(cand)
             n = length(cand);
-            validity = false(1,n);
-            N = zeros(1,n);
-            % 99% Reliability for 2 DOF system
-            thres = chi2inv(0.99,2); 
+            N = zeros(1,n);           
 
             for i=1:n
                 act_meas = cand{i}.actual_meas(2:3);                
                 meas = cand{i}.meas;
                 cov = cand{i}.cov;
-                
                 % Compute Mahalanobis Distance
                 N(i) = (act_meas - meas)' / cov * (act_meas - meas);
-                if N(i) < thres
-                    % For acceptable error (within the reliability range),
-                    % the validity of candidate is set to be true
-                    validity(i) = true;
-                end
+%                 if N(i) < thres
+%                     % For acceptable error (within the reliability range),
+%                     % the validity of candidate is set to be true
+%                     validity(i) = true;
+%                 end
             end
-        end
-        
-        %% Process Validity Array to find acceptable candidate
-        function valid_idx = ProcValidity(validity,N)
-            num_valid = length(find(validity));
-            
-            if num_valid == 0 || num_valid > 1
-                if num_valid == 0
-                    warning('No valid candidate, choosing match from smallest Mahalanobis distance')
-                    % Typically, there must be at least one match
-                    % There is something wrong if there is no match
-                    % * If using INS propagation results directly for
-                    % initial states, this may happen.
-                    % Using 2-phase optimization is recommended to prevent
-                    % situations with 'no match '
-                end
-                [~,valid_idx] = min(N);
-            elseif num_valid == 1
-                valid_idx = find(validity);
-            end
+            [~,idx] = min(N);
         end
        
         %% Concatenate normal map segment and extended map segment
