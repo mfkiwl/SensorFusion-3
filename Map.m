@@ -36,10 +36,6 @@ classdef Map < handle
             % Association
             obj.associate();
 
-            % Segment-wise Association
-            if size(obj.lane.FactorValidIntvs,1) > 1
-                % T.B.D
-            end
         end
 
         %% Map Update
@@ -67,9 +63,9 @@ classdef Map < handle
                 % Except last state of the segment, add 0m previewed points
                 for j = lb:ub
                     R = obj.states{j}.R;
-                    p = obj.states{j}.p;
-                    map.left = [map.left p + R * obj.states{j}.left(:,1)];
-                    map.right = [map.right p + R * obj.states{j}.right(:,1)];
+                    P = obj.states{j}.P;
+                    map.left = [map.left P + R * obj.states{j}.left(:,1)];
+                    map.right = [map.right P + R * obj.states{j}.right(:,1)];
                     state_idx = obj.lane.state_idxs(j);
 
                     % If any of left/right lane detection probability is
@@ -86,18 +82,23 @@ classdef Map < handle
                 % Create Extended Map using last timestep previewed points
                 
                 R = obj.states{ub}.R;
-                p = obj.states{ub}.p;
+                P = obj.states{ub}.P;
                 ext_map = struct();
-                ext_map.left = p + R * obj.states{ub}.left(:,2:end);
-                ext_map.right = p + R * obj.states{ub}.right(:,2:end);
+                ext_map.left = P + R * obj.states{ub}.left(:,2:end);
+                ext_map.right = P + R * obj.states{ub}.right(:,2:end);
                 
                 obj.extended_segments = [obj.extended_segments {ext_map}];
             end
         end
         
-        %% Lane Point data association (within segment)
-        % * Any way to make this more efficient?
+        %% Lane Point data association 
+        % Currently Fixing errors
         % 
+        % Issue 1: Wrong match with interpolated measurement and actual
+        % target match point. 
+        % 
+        %
+
         function obj = associate(obj)
             n = size(obj.lane.FactorValidIntvs,1);
             sampleXthres = 10; % may need to change threshold for valid interval sampling
@@ -106,7 +107,9 @@ classdef Map < handle
                 lb = obj.lane.FactorValidIntvs(i,1);
                 ub = obj.lane.FactorValidIntvs(i,2); 
                 assocL = zeros(ub - lb,obj.lane.prev_num-1);
+                assocLprev = ones(ub - lb,obj.lane.prev_num-1);
                 assocR = assocL;
+                assocRprev = assocLprev;
                 
                 % Association for "normal" cases
                 for j=lb:ub-1
@@ -118,14 +121,15 @@ classdef Map < handle
                         LEFT = obj.states{j}.left;
                         RIGHT = obj.states{j}.right;
                         % Perform frame transformation w.r.t vehicle frame
-                        map_b = frameTransformation(R,P,map);  
+                        map_b = obj.frameTransformation(R,P,map);  
                         xL = map_b.left(1,:);
                         xR = map_b.right(1,:);
 
                         for k=2:obj.lane.prev_num
                             idxL = find(xL > 10*(k-1) - sampleXthres & xL < 10*(k-1) + sampleXthres); 
                             idxR = find(xR > 10*(k-1) - sampleXthres & xR < 10*(k-1) + sampleXthres);
-                            
+                            disp(['Target State Idx: ', num2str(j)])
+                            disp(['Preview Number: ', num2str(k)])
                             if isempty(idxL) || isempty(idxR)
                                 error('No valid idx after transformation...')
                             end
@@ -138,8 +142,14 @@ classdef Map < handle
                                     % interpolate and find resample point.
                                     % There may be multiple candidates
                                     
+                                    disp([xL(idxP), xL(idxN)])
+
                                     [state_idxP,preview_idxP] = obj.getStateIdx(idxP,i);
                                     [state_idxN,preview_idxN] = obj.getStateIdx(idxN,i);
+
+                                    disp([state_idxP,preview_idxP])
+                                    disp([state_idxN,preview_idxN])
+
                                     Rt = obj.states{state_idxP}.R;
                                     Pt = obj.states{state_idxP}.P;
 
@@ -163,7 +173,7 @@ classdef Map < handle
                                     cov_inter = diag([stdy_inter^2,stdz_inter^2]);
 
                                     cand = struct();
-                                    cand.idxP = obj.getStateIdx(idxP,i);
+                                    [cand.idxP, cand.prev_idx] = obj.getStateIdx(idxP,i);
                                     cand.meas = meas_inter;
                                     cand.cov = cov_inter;
                                     % Need to convert actual world frame
@@ -171,6 +181,9 @@ classdef Map < handle
 
                                     cand.actual_meas = Rt' * (P + R * LEFT(:,k) - Pt);
                                     candL = [candL {cand}];
+                                                    
+                                    disp(['Interpolated Measurement: ', num2str(cand.meas')])
+                                    disp(['Target Match Point: ', num2str(cand.actual_meas')])
                                 end                                
                             end
 
@@ -208,7 +221,7 @@ classdef Map < handle
                                     cov_inter = diag([stdy_inter^2,stdz_inter^2]);
 
                                     cand = struct();
-                                    cand.idxP = obj.getStateIdx(idxP,i);
+                                    [cand.idxP, cand.prev_idx] = obj.getStateIdx(idxP,i);
                                     cand.meas = meas_inter;
                                     cand.cov = cov_inter;
                                     % Need to convert actual world frame
@@ -225,12 +238,24 @@ classdef Map < handle
                             [validityR,NR] = obj.ChiSquareTest(candR);
 
                             % Find acceptable candidate from validity array
+                            % output valid index is the index of best
+                            % candidate
                             validIdxL = obj.ProcValidity(validityL,NL);
                             validIdxR = obj.ProcValidity(validityR,NR);
                             
-                            assocL(j-lb+1,k-1) = validIdxL;
-                            assocR(j-lb+1,k-1) = validIdxR;
+                            bestIdxL = candL{validIdxL}.idxP;
+                            bestIdxL_prev = candL{validIdxL}.prev_idx;
+
+                            bestIdxR = candR{validIdxR}.idxP;
+                            bestIdxR_prev = candR{validIdxR}.prev_idx;
+
+                            assocL(j-lb+1,k-1) = bestIdxL;
+                            assocLprev(j-lb+1,k-1) = bestIdxL_prev;
+                            assocR(j-lb+1,k-1) = bestIdxR;
+                            assocRprev(j-lb+1,k-1) = bestIdxR_prev;
                         end
+
+                        error('1')
                     end
                 end
                 
@@ -238,7 +263,15 @@ classdef Map < handle
                 assoc_ = struct();
                 assoc_.L = assocL;
                 assoc_.R = assocR;
+                assoc_.Lprev = assocLprev;
+                assoc_.Rprev = assocRprev;
                 obj.assoc = [obj.assoc {assoc_}];
+
+                % Data Association for Extended Map Matching
+                if i < n
+                    
+                
+                end
             end
 
         end
@@ -280,12 +313,12 @@ classdef Map < handle
             thres = chi2inv(0.99,2); 
 
             for i=1:n
-                act_meas = cand{i}.actual_meas(2:3);
+                act_meas = cand{i}.actual_meas(2:3);                
                 meas = cand{i}.meas;
                 cov = cand{i}.cov;
                 
                 % Compute Mahalanobis Distance
-                N(i) = (act_meas - meas) / cov * (act_meas - meas);
+                N(i) = (act_meas - meas)' / cov * (act_meas - meas);
                 if N(i) < thres
                     % For acceptable error (within the reliability range),
                     % the validity of candidate is set to be true
@@ -319,6 +352,7 @@ classdef Map < handle
             conc_map = struct();
             conc_map.left = [map.left ext_map.left];
             conc_map.right = [map.right ext_map.right];
+            conc_map.will_be_matched = map.will_be_matched;
         end
 
     end
