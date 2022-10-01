@@ -50,6 +50,7 @@ classdef Map < handle
         segments = {}
         extended_segments = {}
         lane_prob_thres
+        ext_assoc = {}
         assoc = {}
         dummy = struct()
     end
@@ -72,7 +73,8 @@ classdef Map < handle
 
         %% Map Update -- To Be Done
         function obj = update(obj)
-
+            % Update segment and extended segments, based on updated state
+            % variables
         end
 
     end
@@ -128,7 +130,7 @@ classdef Map < handle
             n = size(obj.lane.FactorValidIntvs,1);
             sampleXthres = 10; % may need to change threshold for valid interval sampling
             for i=1:n
-                map = obj.MergeMap(obj.segments{i},obj.extended_segments{i});
+                ref_map = obj.MergeMap(obj.segments{i},obj.extended_segments{i});
                 lb = obj.lane.FactorValidIntvs(i,1);
                 ub = obj.lane.FactorValidIntvs(i,2); 
                 assocL = zeros(ub - lb,obj.lane.prev_num-1);
@@ -136,11 +138,9 @@ classdef Map < handle
                 assocR = assocL;
                 assocRprev = assocLprev;
                 
-                obj.dummy.will_be_matched = map.will_be_matched;
                 %  * Association for "normal" cases * 
-
                 for j=lb:ub-1
-                    if map.will_be_matched(j-lb+1)
+                    if ref_map.will_be_matched(j-lb+1)
                         % Perform map matching only for states with good lane
                         % detection reliability
                         R = obj.states{j}.R;
@@ -149,13 +149,9 @@ classdef Map < handle
                         RIGHT = obj.states{j}.right;
 
                         % Perform frame transformation w.r.t vehicle frame
-                        map_b = obj.frameTransformation(R,P,map);  
+                        map_b = obj.frameTransformation(R,P,ref_map);  
                         xL = map_b.left(1,:);
                         xR = map_b.right(1,:);
-                        
-                        
-                        obj.dummy.xL = xL;
-                        obj.dummy.xR = xR;
 
                         for k=2:obj.lane.prev_num
                             idxL = find(xL > 10*(k-1) - sampleXthres & xL < 10*(k-1) + sampleXthres); 
@@ -165,7 +161,9 @@ classdef Map < handle
                                 error('No valid idx after transformation...')
                             end
                             candL = {}; candR = {};
-                            % Left
+
+                            % Left Lane Matching
+
                             for t=1:length(idxL)-1
                                 idxP = idxL(t); idxN = idxL(t+1);
                                 if xL(idxP) < 10*(k-1) && xL(idxN) >= 10*(k-1)
@@ -185,7 +183,7 @@ classdef Map < handle
                                     stdy_ = [obj.lane.lystd(lane_idxP,preview_idxP),...
                                              obj.lane.lystd(lane_idxN,preview_idxN)];
                                     stdz_ = [obj.lane.lzstd(lane_idxP,preview_idxP),...
-                                             obj.lane.lystd(lane_idxN,preview_idxN)];
+                                             obj.lane.lzstd(lane_idxN,preview_idxN)];
                                     y_ = [obj.lane.ly(lane_idxP,preview_idxP),...
                                           obj.lane.ly(lane_idxN,preview_idxN)];
                                     z_ = [obj.lane.lz(lane_idxP,preview_idxP),...
@@ -199,7 +197,8 @@ classdef Map < handle
                                     cov_inter = diag([stdy_inter^2,stdz_inter^2]);
 
                                     cand = struct();
-                                    [cand.idxP, cand.prev_idx] = obj.getStateIdx(idxP,i);
+                                    cand.idxP = state_idxP;
+                                    cand.prev_idx = preview_idxP;
                                     cand.meas = meas_inter;
                                     cand.cov = cov_inter;
                                     % Need to convert actual world frame
@@ -210,7 +209,7 @@ classdef Map < handle
                                 end                                
                             end
 
-                            % Right
+                            % Right Lane Matching (Same as left)
 
                             for t=1:length(idxR)-1
                                 idxP = idxR(t); idxN = idxR(t+1);
@@ -230,7 +229,7 @@ classdef Map < handle
                                     stdy_ = [obj.lane.rystd(lane_idxP,preview_idxP),...
                                              obj.lane.rystd(lane_idxN,preview_idxN)];
                                     stdz_ = [obj.lane.rzstd(lane_idxP,preview_idxP),...
-                                             obj.lane.rystd(lane_idxN,preview_idxN)];
+                                             obj.lane.rzstd(lane_idxN,preview_idxN)];
                                     y_ = [obj.lane.ry(lane_idxP,preview_idxP),...
                                           obj.lane.ry(lane_idxN,preview_idxN)];
                                     z_ = [obj.lane.rz(lane_idxP,preview_idxP),...
@@ -244,7 +243,8 @@ classdef Map < handle
                                     cov_inter = diag([stdy_inter^2,stdz_inter^2]);
 
                                     cand = struct();
-                                    [cand.idxP, cand.prev_idx] = obj.getStateIdx(idxP,i);
+                                    cand.idxP = state_idxP;
+                                    cand.prev_idx = preview_idxP;
                                     cand.meas = meas_inter;
                                     cand.cov = cov_inter;
                                     % Need to convert actual world frame
@@ -285,9 +285,128 @@ classdef Map < handle
 
                 % * Data Association for Extended Map Matching * 
                 % Map-matching for different map segments
-                if i < n
-                    
+                % Set map variable as next segment + extended segment
+                % If lane change does not occur frequently, there is no 
+                % need to add extended segment, but for consecutive lane 
+                % change scenarios, adding extended segment is necessary
                 
+                if i < n
+
+                    ext_assoc_ = zeros(1,obj.lane.prev_num-1);
+                    ext_assoc_prev_ = zeros(1,obj.lane.prev_num-1);
+                    % Next segment map + extended map
+                    ref_map = obj.MergeMap(obj.segments{i+1},obj.extended_segments{i+1});
+                    
+                    % Match only one lane (left or right)
+                    % LeftLeft/RightRight measurements have very low
+                    % reliability, not valid for segment-segment matching
+                    
+                    LC_dir = obj.lane.LC_dirs{i};
+                    state_idx = obj.lane.FactorValidIntvs(i,2);
+                    R = obj.states{state_idx}.R;
+                    P = obj.states{state_idx}.P;
+
+                    if strcmp(LC_dir,'left')
+                        target = obj.extended_segments{i}.left;
+                        % Transform next segment map w.r.t current
+                        % segment's last timestep vehicle frame
+                        ref_map_b = obj.frameTransformation(R,P,ref_map);
+                        ref_map_bx = ref_map_b.right(1,:);
+%                         ref_map_byz = ref_map_b.right(2:3,:);
+                        ystd = obj.lane.rystd;
+                        zstd = obj.lane.rzstd;
+                        y = obj.lane.ry;
+                        z = obj.lane.rz;
+
+                    elseif strcmp(LC_dir,'right')
+                        target = obj.extended_segments{i}.right;
+                        % Transform next segment map w.r.t current
+                        % segment's last timestep vehicle frame
+                        ref_map_b = obj.frameTransformation(R,P,ref_map);
+                        ref_map_bx = ref_map_b.left(1,:);
+%                         ref_map_byz = ref_map_b.left(2:3,:);
+                        ystd = obj.lane.lystd;
+                        zstd = obj.lane.lzstd;
+                        y = obj.lane.ly;
+                        z = obj.lane.lz;
+                    end
+                    
+                    if size(target,2) ~= obj.lane.prev_num-1
+                        error('Extended Segment size error')
+                    end
+                    
+%                     disp('Next segment map relative x coords')
+                    obj.dummy.x = ref_map_bx;
+
+                    for j=1:size(target,2)
+                        % Similar to Normal Map Matching above
+                        point = target(:,j);
+                        idx = find(ref_map_bx > 10*j - sampleXthres & ref_map_bx < 10*j + sampleXthres);
+                        
+                        if ~isempty(idx)
+                            candE = {};
+
+                            for t = 1:length(idx)-1
+                                idxP = idx(t); idxN = idx(t+1);
+                                if ref_map_bx(idxP) < 10*j && ref_map_bx(idxN) > 10*j
+                                    [state_idxP,preview_idxP] = obj.getStateIdx(idxP,i+1);
+                                    [state_idxN,preview_idxN] = obj.getStateIdx(idxN,i+1);
+                                    Rt = obj.states{state_idxP}.R;
+                                    Pt = obj.states{state_idxP}.P;
+    
+                                    lane_idxP = obj.lane.state_idxs(state_idxP);
+                                    lane_idxN = obj.lane.state_idxs(state_idxN);
+                                    x_ = [ref_map_bx(idxP) ref_map_bx(idxN)];
+                                    stdy_ = [ystd(lane_idxP,preview_idxP),...
+                                             ystd(lane_idxN,preview_idxN)];
+                                    stdz_ = [zstd(lane_idxP,preview_idxP),...
+                                             zstd(lane_idxN,preview_idxN)];
+                                    y_ = [y(lane_idxP,preview_idxP),...
+                                          y(lane_idxN,preview_idxN)];
+                                    z_ = [z(lane_idxP,preview_idxP),...
+                                          z(lane_idxN,preview_idxN)];
+    
+                                    stdy_inter = interp1(x_,stdy_,10*j);
+                                    stdz_inter = interp1(x_,stdz_,10*j);
+                                    y_inter = interp1(x_,y_,10*j);
+                                    z_inter = interp1(x_,z_,10*j);
+                                    meas_inter = [y_inter;z_inter];
+                                    cov_inter = diag([stdy_inter^2,stdz_inter^2]);
+    
+                                    cand = struct();
+                                    cand.idxP = state_idxP;
+                                    cand.prev_idx = preview_idxP;
+                                    cand.meas = meas_inter;
+                                    cand.cov = cov_inter;
+    
+                                    cand.actual_meas = Rt' * (point - Pt);
+                                    candE = [candE {cand}];
+                                end
+                            end
+                            
+                            if ~isempty(candE)
+                                validIdx = obj.getValidCandIdx(candE);
+                                bestIdx = candE{validIdx}.idxP;
+                                bestIdx_prev = candE{validIdx}.prev_idx;
+                                ext_assoc_(1,j) = bestIdx;
+                                ext_assoc_prev_(1,j) = bestIdx_prev;
+
+                                Ext_assoc = struct();
+                                Ext_assoc.assoc = ext_assoc_;
+                                Ext_assoc.assoc_prev = ext_assoc_prev_;
+                                
+                                obj.ext_assoc = [obj.ext_assoc {Ext_assoc}];
+                            else
+                                disp([num2str(i),' th extended segment'])
+                                disp(['No valid candidate for extended map ',num2str(j+1),' th preview point'])
+                            end
+                        else
+                            disp([num2str(i),' th extended segment'])
+                            disp(['No valid candidate for extended map ',num2str(j+1),' th preview point' ])
+                        end
+                    end
+%                     error('1');
+
                 end
             end
 
