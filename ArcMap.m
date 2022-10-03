@@ -6,13 +6,15 @@ classdef ArcMap < handle
     properties (Access = public)
         states
         lane
-        segments = {}
+        segments
         segment_info
         lane_prob_thres
         dummy = struct() % Dummy variable for debugging
     end
-
+    
+    %% Public Methods
     methods (Access = public)
+        %% Constructor
         function obj = ArcMap(states,lane,lane_prob_thres)
             obj.states = states;
             obj.lane = lane;
@@ -23,9 +25,25 @@ classdef ArcMap < handle
             
         end
 
-        function obj = InitSegmentClassification(obj) % Transfer to private method after debugging
+        %% Map Visualization (2D Segmentwise Point Map)
+        function obj = visualize2DMap(obj)
+            n = length(obj.segments);
+            
+            figure(1); hold on; grid on; axis equal;
+
+            for i=1:n
+                plot(obj.segments{i}(1,:),obj.segments{i}(2,:));
+            end
+        end
+        
+    end
+    
+    %% Private Methods
+    methods (Access = private)
+        %% Initial Segment Classification
+        function obj = InitSegmentClassification(obj) 
             % Initial Segment Classification
-            % Connect "same" lane points, even for Lane Change.
+            % Cluster "same" lane points, even for Lane Change.
             
             obj.segment_info = zeros(2,size(obj.lane.FactorValidIntvs,1));
             LeftSegNum = 1; RightSegNum = 2;
@@ -48,6 +66,12 @@ classdef ArcMap < handle
 
             n = size(obj.lane.FactorValidIntvs,1);
             
+            obj.segments = {};
+
+            for i=1:n+1
+                obj.segments = [obj.segments {[]}];
+            end
+
             for i=1:n
                 lb = obj.lane.FactorValidIntvs(i,1);
                 ub = obj.lane.FactorValidIntvs(i,2);
@@ -60,20 +84,18 @@ classdef ArcMap < handle
                     Right(:,j-lb+1) = P + R * obj.states{j}.right(:,1);
                 end
                 
-                if i > 1
-                else
-                    obj.segments{obj.segment_info(1,i)} = [obj.segments{obj.segment_info(1,i)} Left];
-
-                    obj.segments{obj.segment_info(2,i)} = [obj.segments{obj.segment_info(2,i)} Right];
-                end
-                
+                obj.segments{obj.segment_info(1,i)} = [obj.segments{obj.segment_info(1,i)} Left];
+                obj.segments{obj.segment_info(2,i)} = [obj.segments{obj.segment_info(2,i)} Right];
             end
+        end
+        
+        %% Initial Segment Parametrization
+        function obj = InitSegmentParametrization(obj)
+            
         end
     end
 
-    methods (Access = private)
-    end
-
+    %% Static Methods
     methods (Static)
     end
 end
