@@ -1,5 +1,9 @@
 classdef Map < handle
     % MAP - map class for lane factor based optimization
+    % 
+    % Point-Map based lane factor - Deprecated Version
+    % Take a look at 'ArcMap.m' instead for the latest version
+    %
     % Initialized by creating virtual map of 0m previewed points
     % * Lane Changes are considered for creating segments
     % * For every segment, last states' previewed points are used to extend
@@ -33,7 +37,12 @@ classdef Map < handle
     % match directly, without any chi-square test
     % (Maybe there should be some threshold for physical distance?)
     % 
-    %
+    % Issue 3: (Reason of deprecation) This class 'Map' is deprecated for
+    % future usage due to the following reasons
+    % (1) Inappropriate for large systems(too many variables)
+    % (2) Point-Map is not the optimal way to represent lanes: Inefficient
+    % (3) Arc-spline representation of lane map is proposed to overcome
+    % drawbacks (1) and (2).
     % ----------------------------------------------------------------
     %
     % To Be Done List
