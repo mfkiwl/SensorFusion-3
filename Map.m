@@ -336,8 +336,10 @@ classdef Map < handle
                     end
                     
 %                     disp('Next segment map relative x coords')
-                    obj.dummy.x = ref_map_bx;
-
+                    if i == 8
+                        obj.dummy.x = ref_map_bx;
+                    end
+                    
                     for j=1:size(target,2)
                         % Similar to Normal Map Matching above
                         point = target(:,j);
@@ -381,6 +383,11 @@ classdef Map < handle
     
                                     cand.actual_meas = Rt' * (point - Pt);
                                     candE = [candE {cand}];
+                                    
+                                    % Simple Debugging
+%                                     if i == 1
+%                                         
+%                                     end
                                 end
                             end
                             

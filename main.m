@@ -95,3 +95,13 @@ sol.full.optimize();
 sol.full.update('2-phase') % Update mode to 2-phase
 % sol.full.optimize();
 % sol.full.visualize();
+
+
+%% Simple Debugging
+
+figure(1);
+plot(sol.full.map.segments{9}.left(1,:),sol.full.map.segments{9}.left(2,:),'rx'); hold on; grid on; axis equal;
+plot(sol.full.map.extended_segments{8}.right(1,:),sol.full.map.extended_segments{8}.right(2,:),'bx');
+
+%%
+sol.full.visualize();

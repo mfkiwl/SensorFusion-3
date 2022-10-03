@@ -52,7 +52,7 @@ classdef optimizer < handle
         bgd_thres = 1e-2; % Gyro bias repropagation threshold
         bad_thres = 1e-1; % Accel bias repropagation threshold
 
-        map % map variable for 'full' or '2-phase' mode
+        map; % map variable for 'full' or '2-phase' mode
         opt = struct() % Optimized results
     end
     
@@ -217,6 +217,11 @@ classdef optimizer < handle
                 left_ = left{i}; right_ = right{i};
                 plot(left_(1,1),left_(2,1),'cx');
                 plot(right_(1,1),right_(2,1),'mx');
+            end
+
+            for i=1:size(obj.lane.FactorValidIntvs,1)-1
+                ub = obj.lane.FactorValidIntvs(i,2);
+                plot(obj.states{ub}.P(1),obj.states{ub}.P(2),'g+');
             end
 %             if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
 %                 for i=1:n
