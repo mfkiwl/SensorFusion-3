@@ -108,7 +108,7 @@ classdef optimizer < handle
             end
             
             if strcmp(obj.mode,'2-phase')
-                obj.map = Map(obj.states,obj.lane,obj.lane.prob_thres); % Create and initialize Map
+                obj.map = ArcMap(obj.states,obj.lane,obj.lane.prob_thres); % Create and initialize Map
             end           
         end
 
