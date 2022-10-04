@@ -7,6 +7,7 @@ classdef ArcMap < handle
         states
         lane
         segments
+        arc_segments = {}
         segment_info
         lane_prob_thres
         dummy = struct() % Dummy variable for debugging
@@ -29,13 +30,12 @@ classdef ArcMap < handle
 
         %% Map Visualization (2D Segmentwise Point Map)
         function obj = visualize2DMap(obj)
-            n = length(obj.segments);
+            % Alter this function for debugging purpose
+            % Current : Visualize initial arc segmentation results
             
-            figure(1); hold on; grid on; axis equal;
-
-            for i=1:n
-                plot(obj.segments{i}(1,:),obj.segments{i}(2,:));
-            end
+%             n = length(obj.arc_segments);
+%             
+%             figure(1); hold on; grid on; axis equal;
         end
         
     end
@@ -96,18 +96,14 @@ classdef ArcMap < handle
             % For each separate segment, perform parametrization
             n = length(obj.segments);
             for i=1:n
+                disp(['[Segment ',num2str(i),']'])
                 initIntv = obj.segmentation(obj.segments{i},[1,length(obj.segments{i})],1);
-                
+                obj.arc_segments = [obj.arc_segments {obj.mergeSeg(obj.segments{i},initIntv)}];
             end
         end
 
-       
-    end
-
-    %% Static Methods
-    methods (Static)
-         %% Initial segmentation
-        function intvs = segmentation(LP,intv,depth)
+        %% Initial segmentation
+        function intvs = segmentation(obj,LP,intv,depth)
             % (1). Connect first and end intervals with a line
             % (2). Find the maximum vertical error data point
             % (3). Divide the data points of interest into two w.r.t point found at (b).
@@ -150,30 +146,39 @@ classdef ArcMap < handle
                 % Current line interpolation is accurate enough
                 intvs = intv;
             else
-                intv1 = obj.segmentation([intv(1) intv(1)+max_idx-1],depth+1);
-                intv2 = obj.segmentation([intv(1)+max_idx-1 intv(2)],depth+1);
+                intv1 = obj.segmentation(LP,[intv(1) intv(1)+max_idx-1],depth+1);
+                intv2 = obj.segmentation(LP,[intv(1)+max_idx-1 intv(2)],depth+1);
                 intvs = [intv1 intv2];
             end
         
         end
-
+        
         %% Merge line interpolated segments for valid circular approximation
-        function obj = mergeSeg(LP,intvL)
+        function initSegments = mergeSeg(obj,LP,intvL)
             % Merge line intervals for valid circular approximation and
-            % save data to "obj.init_segments"
+            % save data. Since covariance or weight data of lane points are
+            % not available, use rmse error for determining the 'goodness'
+            % of circular fitting.
+            rmse_thres = 1;
             lb = 1; n = numel(intvL); cnt = 1;
+            
+            initSegments = {};
+
             while true
                 
-                [~,err] = CircleFit(LP(1,intvL(lb):intvL(n))',...
-                                    LP(2,intvL(lb):intvL(n))',...
-                                    obj.w(intvL(lb):intvL(n))',...
-                                    obj.cov(:,intvL(lb):intvL(n)),...
-                                    0.99,false);
-                if err.valid
-                    disp(['Segment No. ',num2str(cnt),...
+                [res,err] = CircleFit(LP(1,intvL(lb):intvL(n))',...
+                                      LP(2,intvL(lb):intvL(n))',...
+                                      ones(intvL(n)-intvL(lb)+1,1),...
+                                      [ones(1,intvL(n)-intvL(lb)+1); ...
+                                       zeros(1,intvL(n)-intvL(lb)+1); ...
+                                       zeros(1,intvL(n)-intvL(lb)+1); ...
+                                       ones(1,intvL(n)-intvL(lb)+1)],...
+                                      0.99,false);
+                if err.rmse < rmse_thres
+                    disp(['Sub-Segment No. ',num2str(cnt),...
                           ' Idx ',num2str(intvL(lb)),' ~ ',num2str(intvL(n))])
-                    res.bnds = [lb n];
-                    obj.init_segments = [obj.init_segments res];
+                    res.bnds = [intvL(lb) intvL(n)];
+                    initSegments = [initSegments res];
                     break;
                 end
 
@@ -190,34 +195,40 @@ classdef ArcMap < handle
                     % Upper bound is found randomly between (lb+1,n) so that
                     % maximum circular fitting error is between values 3 and 5
                     ub = obj.randint(lb+1,n);                    
-                    [~,err] = CircleFit(obj.LP(1,intvL(lb):intvL(ub))',...
-                                        obj.LP(2,intvL(lb):intvL(ub))',...
-                                        obj.w(intvL(lb):intvL(ub))',...
-                                        obj.cov(:,intvL(lb):intvL(ub)),...
+                    [~,err] = CircleFit(LP(1,intvL(lb):intvL(ub))',...
+                                        LP(2,intvL(lb):intvL(ub))',...
+                                        ones(intvL(ub)-intvL(lb)+1,1),...
+                                        [ones(1,intvL(ub)-intvL(lb)+1); ...
+                                         zeros(1,intvL(ub)-intvL(lb)+1); ...
+                                         zeros(1,intvL(ub)-intvL(lb)+1); ...
+                                         ones(1,intvL(ub)-intvL(lb)+1)],...
                                         0.99,false);
                     max_fit_err = err.emax;
                 end
     
-                valid = err.valid;
+                rmse = inf;
     
-                while ~valid
+                while rmse > rmse_thres
                     ub = ub - 1;
                     
                     if ub == lb
                         error('Need more line segmentation. Lower the line acc value')
                     end
-                    [res,err] = CircleFit(obj.LP(1,intvL(lb):intvL(ub))',...
-                                          obj.LP(2,intvL(lb):intvL(ub))',...
-                                          obj.w(intvL(lb):intvL(ub))',...
-                                          obj.cov(:,intvL(lb):intvL(ub)),...
+                    [res,err] = CircleFit(LP(1,intvL(lb):intvL(ub))',...
+                                          LP(2,intvL(lb):intvL(ub))',...
+                                          ones(intvL(ub)-intvL(lb)+1,1),...
+                                          [ones(1,intvL(ub)-intvL(lb)+1); ...
+                                           zeros(1,intvL(ub)-intvL(lb)+1); ...
+                                           zeros(1,intvL(ub)-intvL(lb)+1); ...
+                                           ones(1,intvL(ub)-intvL(lb)+1)],...
                                           0.99,false);
-                    valid = err.valid;
+                    rmse = err.rmse;
                     
                 end
-                disp(['Segment No. ',num2str(cnt),...
+                disp(['Sub-Segment No. ',num2str(cnt),...
                       ' Idx ',num2str(intvL(lb)),' ~ ',num2str(intvL(ub))])
                 res.bnds = [intvL(lb) intvL(ub)];
-                obj.init_segments = [obj.init_segments res];
+                initSegments = [initSegments res];
                 cnt = cnt + 1;
                 lb = ub;
                 
@@ -225,14 +236,17 @@ classdef ArcMap < handle
                     error('Need more line segmentation. Lower the line acc value')
                 end
             end
-            obj.num_seg = cnt;
-
         end
 
+    end
+
+    %% Static Methods
+    methods (Static)
         %% Get random integer with bnds
         function val = randint(val1,val2)
             % find val from [val1, val2] randomly
             val = val1-1+randi(val2-val1+1);
         end
+
     end
 end

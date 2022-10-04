@@ -90,6 +90,7 @@ function [res, err] = CircleFit(X,Y,w,cov,thres,plot_flag)
     err.valid = true;
     cnt = 0;
     
+    errsq_sum = 0;
     for i=1:n
         th = atan2(Y(i) - res.y, X(i) - res.x);
         lp_pred = [res.x + res.R * cos(th);
@@ -97,8 +98,10 @@ function [res, err] = CircleFit(X,Y,w,cov,thres,plot_flag)
         diff = lp_pred - [X(i);Y(i)];
         
         cov_ = reshape(cov(:,i),2,2);
-
-        err.full(i) = sqrt(diff' * diff);
+        
+        errsq = diff' * diff;
+        errsq_sum = errsq_sum + errsq;
+        err.full(i) = sqrt(errsq);
         err.wfull(i) = sqrt(diff' / cov_ * diff);
         
         if err.wfull(i) > err.wthres
@@ -111,6 +114,7 @@ function [res, err] = CircleFit(X,Y,w,cov,thres,plot_flag)
     end
 
     err.emax = max(err.full);
+    err.rmse = sqrt(errsq_sum/n);
 
     %% Plot Results
     if plot_flag
