@@ -10,6 +10,8 @@ classdef ArcMap < handle
         arc_segments = {}
         segment_info
         lane_prob_thres
+        assocL
+        assocR
         dummy = struct() % Dummy variable for debugging
     end
     
@@ -26,6 +28,9 @@ classdef ArcMap < handle
             
             % Initial Segment Parametrization
             obj.InitSegmentParametrization();
+
+            % Data Association
+            obj.associate();
         end
 
         %% Map Visualization (2D Segmentwise Point Map)
@@ -237,6 +242,85 @@ classdef ArcMap < handle
                 end
             end
         end
+        
+        %% Data Association
+        function obj = associate(obj)
+            % Data Association with current vehicle state and arc-spline
+            % map
+            n = size(obj.lane.FactorValidIntvs,1);
+            
+            obj.assocL = zeros(length(obj.states),obj.lane.prev_num);
+            obj.assocR = obj.assocL;
+
+            for i=1:n
+                % State lb and ub for each large segment
+                lb = obj.lane.FactorValidIntvs(i,1);
+                ub = obj.lane.FactorValidIntvs(i,2);
+
+                leftSegmentIdx = obj.segment_info(1,i);
+                rightSegmentIdx = obj.segment_info(2,i);
+
+                leftSegment = obj.arc_segments{leftSegmentIdx};
+                rightSegment = obj.arc_segments{rightSegmentIdx};
+                
+                mL = length(leftSegment);
+                mR = length(rightSegment);
+                
+                % Save arc segment node points
+                leftSegPoints = []; rightSegPoints = [];
+                % Left Segment
+                for j=1:mL
+                    seg = leftSegment{j};
+                    initPoint = [seg.x + seg.R * cos(seg.th_init);
+                                 seg.y + seg.R * sin(seg.th_init)];
+                    leftSegPoints = [leftSegPoints initPoint];
+                    if j == mL
+                        lastPoint = [seg.x + seg.R * cos(seg.th_last);
+                                     seg.y + seg.R * sin(seg.th_last)];
+                        leftSegPoints = [leftSegPoints lastPoint];
+                    end
+                end
+
+                % Right Segment
+                for j=1:mR
+                    seg = rightSegment{j};
+                    initPoint = [seg.x + seg.R * cos(seg.th_init);
+                                 seg.y + seg.R * sin(seg.th_init)];
+                    rightSegPoints = [rightSegPoints initPoint];
+                    if j == mL
+                        lastPoint = [seg.x + seg.R * cos(seg.th_last);
+                                     seg.y + seg.R * sin(seg.th_last)];
+                        rightSegPoints = [rightSegPoints lastPoint];
+                    end
+                end
+
+                % Perform matching for valid points
+                for j=lb:ub
+                    lane_idx = obj.lane.state_idxs(j);
+                    % Filter Valid state idx
+                    if obj.lane.prob(lane_idx,2) > obj.lane_prob_thres && obj.lane.prob(lane_idx,3) > obj.lane_prob_thres
+                        R = obj.states{j}.R;
+                        P = obj.states{j}.P;
+                        
+                        for k=1:obj.lane.prev_num
+                            rel_pos = [10*(k-1);0;0];
+                            pos = P + R * rel_pos;
+                            
+                            segIdxL = obj.match(pos,R,leftSegPoints,leftSegment);
+                            segIdxR = obj.match(pos,R,rightSegPoints,rightSegment);
+
+                            obj.assocL(j-lb+1,k) = segIdxL;
+                            obj.assocR(j-lb+1,k) = segIdxR;
+                        end
+                        
+                        
+                    end
+                end
+            end
+
+        end
+
+        
 
     end
 
@@ -246,6 +330,57 @@ classdef ArcMap < handle
         function val = randint(val1,val2)
             % find val from [val1, val2] randomly
             val = val1-1+randi(val2-val1+1);
+        end
+        
+        %% Point-Segment Matching
+        function segIdx = match(pos,att,segPoints,segments)
+            % May need to fix
+            % Matching is performed in 2D manner
+            n = size(segPoints,2);
+            
+            rpy = dcm2rpy(att);
+            psi = rpy(3);
+            xv = pos(1); yv = pos(2);
+            
+            cand = [];
+            for i=1:n-1
+                % Geometry based matching is performed
+                % If intersection point is between the 2 node points,
+                % dP will be the largest among [dP,d1,d2]
+                % If dP is not the largest, intersection point is not
+                % between the 2 node points, meaning that matching is not
+                % appropriate.
+                P1 = segPoints(:,i); P2 = segPoints(:,i+1);
+                dP = (P1 - P2)' * (P1 - P2);
+                
+                x1 = P1(1); y1 = P1(2); 
+                x2 = P2(1); y2 = P2(2);
+                
+                x_intersect = (x1 * (y2 - y1)/(x2 - x1) - y1 + xv * 1/tan(psi) + yv)/((y2 - y1)/(x2 - x1) + 1/tan(psi));
+                y_intersect = (y2 - y1)/(x2 - x1) * (x_intersect - x1) + y1;
+                P_intersect = [x_intersect;y_intersect];
+
+                d1 = (P1 - P_intersect)' * (P1 - P_intersect);
+                d2 = (P2 - P_intersect)' * (P2 - P_intersect);
+
+                if max([dP,d1,d2]) == dP
+                    % Matching Success
+                    % Compute arc center to vehicle distance
+                    arc_c = [segments{i}.x; segments{i}.y];
+                    dist = abs(sqrt(([xv;yv] - arc_c)' * ([xv;yv] - arc_c)) - abs(1/segments{i}.kappa));
+                    
+                    cand = [cand [i;dist]];
+                end
+            end
+
+            if ~isempty(cand)
+                % If match candidate exists, pick the one with smallest
+                % matching error as the correct match
+                [~,idx] = min(cand(2,:));
+                segIdx = cand(1,idx);
+            else
+                segIdx = 0;
+            end
         end
 
     end
