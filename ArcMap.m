@@ -8,6 +8,7 @@ classdef ArcMap < handle
         lane
         segments
         arc_segments = {}
+        arc_nodes = {}
         segment_info
         lane_prob_thres
         assocL
@@ -37,10 +38,47 @@ classdef ArcMap < handle
         function obj = visualize2DMap(obj)
             % Alter this function for debugging purpose
             % Current : Visualize initial arc segmentation results
+
+            figure(1); hold on; grid on; axis equal;
             
-%             n = length(obj.arc_segments);
-%             
-%             figure(1); hold on; grid on; axis equal;
+            n = length(obj.states);
+            
+            for i=1:n
+                P = obj.states{i}.P;
+                plot(P(1),P(2),'r.');
+%                 if i~=n % Mark association failure checkpoints
+%                     if (obj.assocL(i,1)==0 && obj.assocL(i+1,1)~=0)
+%                         plot(P(1),P(2),'cx');
+%                     elseif (obj.assocL(i,1)~=0 && obj.assocL(i+1,1)==0)
+%                         plot(P(1),P(2),'gx');
+%                     end
+%                 end
+            end
+
+            n = length(obj.arc_segments);
+            for i=1:n
+                m = length(obj.arc_segments{i});
+                initStateIdx = obj.lane.FactorValidIntvs(obj.findColIdx(obj.segment_info,i),1);
+                segment = obj.segments{i};
+%                 rpy = dcm2rpy(obj.states{initStateIdx}.R); heading = rpy(3);
+                heading = atan2(segment(2,2)-segment(2,1),segment(1,2)-segment(1,1));
+                
+                segPoints = [obj.arc_segments{i}{1}.x + obj.arc_segments{i}{1}.R * cos(obj.arc_segments{i}{1}.th_init);
+                             obj.arc_segments{i}{1}.y + obj.arc_segments{i}{1}.R * sin(obj.arc_segments{i}{1}.th_init)];
+                for j=1:m
+                    seg = obj.arc_segments{i}{j};
+                    kappa = seg.kappa; L = seg.L;
+                    headingPrev = heading;
+                    heading = heading + kappa * L;
+                    headingCurr = heading;
+
+                    heading_ = linspace(headingPrev,headingCurr,1e3);
+                    segPoints = [segPoints segPoints(:,end) + 1/kappa * [sin(heading_) - sin(headingPrev);
+                                                                        -cos(heading_) + cos(headingPrev)]];
+                end
+                plot(segPoints(1,:),segPoints(2,:),'k-');
+            end
+           
         end
         
     end
@@ -247,6 +285,34 @@ classdef ArcMap < handle
         function obj = associate(obj)
             % Data Association with current vehicle state and arc-spline
             % map
+            
+            
+%             figure(2);hold on; grid on; axis equal;
+
+            % Create arc segment node points before data association
+            n = length(obj.arc_segments);
+            for i=1:n
+                m = length(obj.arc_segments{i});
+                
+                segment = obj.segments{i};
+                heading = atan2(segment(2,2)-segment(2,1),segment(1,2)-segment(1,1));
+                
+                segPoints = [obj.arc_segments{i}{1}.x + obj.arc_segments{i}{1}.R * cos(obj.arc_segments{i}{1}.th_init);
+                             obj.arc_segments{i}{1}.y + obj.arc_segments{i}{1}.R * sin(obj.arc_segments{i}{1}.th_init)];
+
+                for j=1:m
+                    seg = obj.arc_segments{i}{j};
+                    kappa = seg.kappa; L = seg.L;
+                    headingPrev = heading;
+                    heading = heading + kappa * L;
+                    headingCurr = heading;
+                    segPoints = [segPoints segPoints(:,end) + 1/kappa * [sin(headingCurr) - sin(headingPrev);
+                                                                        -cos(headingCurr) + cos(headingPrev)]];
+                end
+                obj.arc_nodes = [obj.arc_nodes {segPoints}];
+            end
+
+            % Data Association
             n = size(obj.lane.FactorValidIntvs,1);
             
             obj.assocL = zeros(length(obj.states),obj.lane.prev_num);
@@ -260,48 +326,19 @@ classdef ArcMap < handle
                 leftSegmentIdx = obj.segment_info(1,i);
                 rightSegmentIdx = obj.segment_info(2,i);
 
+                leftSegPoints = obj.arc_nodes{leftSegmentIdx};
+                rightSegPoints = obj.arc_nodes{rightSegmentIdx};
                 leftSegment = obj.arc_segments{leftSegmentIdx};
                 rightSegment = obj.arc_segments{rightSegmentIdx};
-                
-                mL = length(leftSegment);
-                mR = length(rightSegment);
-                
-                % Save arc segment node points
-                leftSegPoints = []; rightSegPoints = [];
-                % Left Segment
-                for j=1:mL
-                    seg = leftSegment{j};
-                    initPoint = [seg.x + seg.R * cos(seg.th_init);
-                                 seg.y + seg.R * sin(seg.th_init)];
-                    leftSegPoints = [leftSegPoints initPoint];
-                    if j == mL
-                        lastPoint = [seg.x + seg.R * cos(seg.th_last);
-                                     seg.y + seg.R * sin(seg.th_last)];
-                        leftSegPoints = [leftSegPoints lastPoint];
-                    end
-                end
-
-                % Right Segment
-                for j=1:mR
-                    seg = rightSegment{j};
-                    initPoint = [seg.x + seg.R * cos(seg.th_init);
-                                 seg.y + seg.R * sin(seg.th_init)];
-                    rightSegPoints = [rightSegPoints initPoint];
-                    if j == mL
-                        lastPoint = [seg.x + seg.R * cos(seg.th_last);
-                                     seg.y + seg.R * sin(seg.th_last)];
-                        rightSegPoints = [rightSegPoints lastPoint];
-                    end
-                end
 
                 % Perform matching for valid points
                 for j=lb:ub
                     lane_idx = obj.lane.state_idxs(j);
+                    
+                    R = obj.states{j}.R;
+                    P = obj.states{j}.P;
                     % Filter Valid state idx
                     if obj.lane.prob(lane_idx,2) > obj.lane_prob_thres && obj.lane.prob(lane_idx,3) > obj.lane_prob_thres
-                        R = obj.states{j}.R;
-                        P = obj.states{j}.P;
-                        
                         for k=1:obj.lane.prev_num
                             rel_pos = [10*(k-1);0;0];
                             pos = P + R * rel_pos;
@@ -309,11 +346,15 @@ classdef ArcMap < handle
                             segIdxL = obj.match(pos,R,leftSegPoints,leftSegment);
                             segIdxR = obj.match(pos,R,rightSegPoints,rightSegment);
 
-                            obj.assocL(j-lb+1,k) = segIdxL;
-                            obj.assocR(j-lb+1,k) = segIdxR;
+                            obj.assocL(j,k) = segIdxL;
+                            obj.assocR(j,k) = segIdxR;
                         end
-                        
-                        
+                    else % For low reliability lane measurement, use only 0m preview measurement                        
+                        segIdxL = obj.match(P,R,leftSegPoints,leftSegment);
+                        segIdxR = obj.match(P,R,rightSegPoints,rightSegment);
+
+                        obj.assocL(j,1) = segIdxL;
+                        obj.assocR(j,1) = segIdxR;
                     end
                 end
             end
@@ -321,7 +362,6 @@ classdef ArcMap < handle
         end
 
         
-
     end
 
     %% Static Methods
@@ -338,8 +378,7 @@ classdef ArcMap < handle
             % Matching is performed in 2D manner
             n = size(segPoints,2);
             
-            rpy = dcm2rpy(att);
-            psi = rpy(3);
+            rpy = dcm2rpy(att); psi = rpy(3);
             xv = pos(1); yv = pos(2);
             
             cand = [];
@@ -383,5 +422,11 @@ classdef ArcMap < handle
             end
         end
 
+        %% Find minimum column index for first appearance
+        function idx = findColIdx(arr,num)
+            % Find the first column in arr where num first appears
+            [~,c] = find(arr==num);
+            idx = min(c);
+        end
     end
 end

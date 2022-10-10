@@ -55,37 +55,21 @@ function [res, err] = CircleFit(X,Y,w,cov,thres,plot_flag)
     
     % Arc Length calculation 
     % Need to calculate differently for near singularity points(for atan2): near pi
-    % Currently working, but will fail for general cases.
-    % **** Need to fix! ****
-    % - Arc center angles may start from angles with absolute value smaller
-    % than pi/2
-
+    
     if res.th_init < -pi/2 && res.th_last > pi/2
         % Case 1
-        if isempty(X(X > res.x)) 
+        if isempty(X > res.x) 
             % If actual data segment is placed at the angle singularity
-            % range, calculate the center angle differently
             dtheta = pi + res.th_init + pi - res.th_last;
             res.L = res.R * dtheta;
         else
-            % Else, take the larger portion of the circle as the correct
-            % segment (normal calculation method)
             res.L = res.R * abs(res.th_last - res.th_init);
         end
     elseif res.th_init > pi/2 && res.th_last < -pi/2
         % Case 2
-        if isempty(X(X > res.x)) 
-            % If actual data segment is placed at the angle singularity
-            % range, calculate the center angle differently
-            dtheta = pi - res.th_init + pi + res.th_last;
-            res.L = res.R * dtheta;
-        else
-            % Else, take the larger portion of the circle as the correct
-            % segment (normal calculation method)
-            res.L = res.R * abs(res.th_last - res.th_init);
-        end
     else
         res.L = res.R * abs(res.th_last - res.th_init); % arc length
+
     end
     
     if ~isreal(res.R)
