@@ -31,7 +31,12 @@ classdef ArcMap < handle
             obj.InitSegmentParametrization();
 
             % Data Association
-            obj.associate();
+            obj.associate(true);
+        end
+        
+        %% Map Update
+        function obj = update(obj,states)
+            
         end
 
         %% Map Visualization (2D Segmentwise Point Map)
@@ -46,13 +51,6 @@ classdef ArcMap < handle
             for i=1:n
                 P = obj.states{i}.P;
                 plot(P(1),P(2),'r.');
-%                 if i~=n % Mark association failure checkpoints
-%                     if (obj.assocL(i,1)==0 && obj.assocL(i+1,1)~=0)
-%                         plot(P(1),P(2),'cx');
-%                     elseif (obj.assocL(i,1)~=0 && obj.assocL(i+1,1)==0)
-%                         plot(P(1),P(2),'gx');
-%                     end
-%                 end
             end
 
             n = length(obj.arc_segments);
@@ -60,7 +58,6 @@ classdef ArcMap < handle
                 m = length(obj.arc_segments{i});
                 initStateIdx = obj.lane.FactorValidIntvs(obj.findColIdx(obj.segment_info,i),1);
                 segment = obj.segments{i};
-%                 rpy = dcm2rpy(obj.states{initStateIdx}.R); heading = rpy(3);
                 heading = atan2(segment(2,2)-segment(2,1),segment(1,2)-segment(1,1));
                 
                 segPoints = [obj.arc_segments{i}{1}.x + obj.arc_segments{i}{1}.R * cos(obj.arc_segments{i}{1}.th_init);
@@ -282,24 +279,29 @@ classdef ArcMap < handle
         end
         
         %% Data Association
-        function obj = associate(obj)
+        function obj = associate(obj,init_flag)
             % Data Association with current vehicle state and arc-spline
-            % map
-            
-            
-%             figure(2);hold on; grid on; axis equal;
-
+            % parameters. After each step in optimization, vehicle states
+            % and arc parameters should be updated before re-association
+            %
             % Create arc segment node points before data association
             n = length(obj.arc_segments);
             for i=1:n
                 m = length(obj.arc_segments{i});
                 
-                segment = obj.segments{i};
-                heading = atan2(segment(2,2)-segment(2,1),segment(1,2)-segment(1,1));
-                
-                segPoints = [obj.arc_segments{i}{1}.x + obj.arc_segments{i}{1}.R * cos(obj.arc_segments{i}{1}.th_init);
-                             obj.arc_segments{i}{1}.y + obj.arc_segments{i}{1}.R * sin(obj.arc_segments{i}{1}.th_init)];
+                if init_flag
+                    segment = obj.segments{i};
 
+                    % For initial data association, assign heading angle
+                    heading = atan2(segment(2,2)-segment(2,1),segment(1,2)-segment(1,1)); % Not very accurate
+                    % vehicle yaw angle from states
+
+                    segPoints = [obj.arc_segments{i}{1}.x + obj.arc_segments{i}{1}.R * cos(obj.arc_segments{i}{1}.th_init);
+                                 obj.arc_segments{i}{1}.y + obj.arc_segments{i}{1}.R * sin(obj.arc_segments{i}{1}.th_init)];
+                else
+
+                end
+                
                 for j=1:m
                     seg = obj.arc_segments{i}{j};
                     kappa = seg.kappa; L = seg.L;
