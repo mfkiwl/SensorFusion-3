@@ -1270,7 +1270,7 @@ classdef optimizer < handle
             end
         end
         
-        %% Lane Merging based Measurement Residual and Jacobian
+        %% Arc Spline based Measurement Residual and Jacobian
         function [LA_res,LA_jac] = CreateLABlock(obj)
             % To be done
         end
@@ -1290,10 +1290,11 @@ classdef optimizer < handle
                 obj.retractWSF(wsf_delta);
                 
                 if strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
-                    num = length(obj.lane.FactorValidIdxs);
-                    left_delta = delta(16*n+1:16*n+num*3*obj.lane.prev_num);
-                    right_delta = delta(16*n+num*3*obj.lane.prev_num+1:16*n+3*num*2*obj.lane.prev_num);
-                    obj.retractLane(left_delta,right_delta);
+                    % To be done
+%                     num = length(obj.lane.FactorValidIdxs);
+%                     left_delta = delta(16*n+1:16*n+num*3*obj.lane.prev_num);
+%                     right_delta = delta(16*n+num*3*obj.lane.prev_num+1:16*n+3*num*2*obj.lane.prev_num);
+%                     obj.retractLane(left_delta,right_delta);
                 end
             end
             
@@ -1395,15 +1396,16 @@ classdef optimizer < handle
         
         %% Lane Retraction
         function obj = retractLane(obj,left_delta,right_delta)
-            num = length(obj.lane.FactorValidIdxs);
-            for i=1:num
-                state_idx = obj.lane.FactorValidIdxs(i);
-                left_sample = reshape(left_delta(3*(i-1)*obj.lane.prev_num+1:3*i*obj.lane.prev_num),3,obj.lane.prev_num);
-                right_sample = reshape(right_delta(3*(i-1)*obj.lane.prev_num+1:3*i*obj.lane.prev_num),3,obj.lane.prev_num);
-
-                obj.states{state_idx}.left = obj.states{state_idx}.left + left_sample;
-                obj.states{state_idx}.right = obj.states{state_idx}.right + right_sample;
-            end
+            % To be done
+%             num = length(obj.lane.FactorValidIdxs);
+%             for i=1:num
+%                 state_idx = obj.lane.FactorValidIdxs(i);
+%                 left_sample = reshape(left_delta(3*(i-1)*obj.lane.prev_num+1:3*i*obj.lane.prev_num),3,obj.lane.prev_num);
+%                 right_sample = reshape(right_delta(3*(i-1)*obj.lane.prev_num+1:3*i*obj.lane.prev_num),3,obj.lane.prev_num);
+% 
+%                 obj.states{state_idx}.left = obj.states{state_idx}.left + left_sample;
+%                 obj.states{state_idx}.right = obj.states{state_idx}.right + right_sample;
+%             end
         end
 
     end
@@ -1459,7 +1461,7 @@ classdef optimizer < handle
         %     Jl = Jl(:,1); % Only take the longitudinal lever arm as the optimization variable
         end
         
-        %% Lane Measurement Jacobian
+        %% Lane Measurement Jacobian -- Deprecated
         function [Jri,Jpi,JLij,JLijp1,Jrip1,Jpip1,JLip1j] = getMEJac(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,j)
             A = Ri' * (Pip1 + Rip1 * Lip1j - Pi);
             B = eye(3) + 1/10 * [Lij - Lijp1 zeros(3,2)];

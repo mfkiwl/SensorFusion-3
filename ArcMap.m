@@ -31,12 +31,46 @@ classdef ArcMap < handle
             obj.InitSegmentParametrization();
 
             % Data Association
-            obj.associate(true);
+            obj.associate();
         end
         
         %% Map Update
-        function obj = update(obj,states)
+        function obj = update(obj,states,arc_params)
+            % Update variables after iterative optimization step
+            % Input variable format
+            % states: cell-struct --> copy of state variable
+            % arc_params: cell-struct --> processed 
+            obj.states = states;
             
+            if length(obj.arc_segments) ~= length(arc_params)
+                error('Length of processed arc parameters are inappropriate')
+            end
+
+            % Re-initialize variables
+            for i=1:length(obj.arc_segments)                
+                obj.arc_segments{i}.kappa = arc_params{i}.kappa;
+                obj.arc_segments{i}.L = arc_params{i}.L;
+                obj.arc_segments{i}.x0 = arc_params{i}.x0;
+                obj.arc_segments{i}.y0 = arc_params{i}.y0;
+                obj.arc_segments{i}.tau0 = arc_params{i}.tau0;
+                
+                heading = obj.arc_segments{i}.tau0;
+                obj.arc_segments{i}.xc = [];
+                obj.arc_segments{i}.yc = [];
+                for j=1:length(obj.arc_segments{i}.kappa)                    
+                    if j==1
+                        obj.arc_segments{i}.xc = obj.arc_segments{i}.x0 - 1/obj.arc_segments{i}.kappa(j) * sin(heading);
+                        obj.arc_segments{i}.yc = obj.arc_segments{i}.y0 + 1/obj.arc_segments{i}.kappa(j) * cos(heading);
+                    else
+                        obj.arc_segments{i}.xc = [obj.arc_segments{i}.xc obj.arc_segments{i}.xc(end) + (1/obj.arc_segments{i}.kappa(j-1) - 1/obj.arc_segments{i}.kappa(j)) * sin(heading)];
+                        obj.arc_segments{i}.yc = [obj.arc_segments{i}.yc obj.arc_segments{i}.yc(end) - (1/obj.arc_segments{i}.kappa(j-1) - 1/obj.arc_segments{i}.kappa(j)) * cos(heading)];
+                    end
+                    heading = heading + obj.arc_segments{i}.kappa(j) * obj.arc_segments{i}.L(j);
+                end
+            end
+
+            % Perform data association with updated variables
+            obj.associate();
         end
 
         %% Map Visualization (2D Segmentwise Point Map)
@@ -55,16 +89,13 @@ classdef ArcMap < handle
 
             n = length(obj.arc_segments);
             for i=1:n
-                m = length(obj.arc_segments{i});
-                initStateIdx = obj.lane.FactorValidIntvs(obj.findColIdx(obj.segment_info,i),1);
-                segment = obj.segments{i};
-                heading = atan2(segment(2,2)-segment(2,1),segment(1,2)-segment(1,1));
-                
-                segPoints = [obj.arc_segments{i}{1}.x + obj.arc_segments{i}{1}.R * cos(obj.arc_segments{i}{1}.th_init);
-                             obj.arc_segments{i}{1}.y + obj.arc_segments{i}{1}.R * sin(obj.arc_segments{i}{1}.th_init)];
+                m = length(obj.arc_segments{i}.kappa);
+                seg = obj.arc_segments{i};
+                heading = seg.tau0;
+                segPoints = [seg.x0;
+                             seg.y0];
                 for j=1:m
-                    seg = obj.arc_segments{i}{j};
-                    kappa = seg.kappa; L = seg.L;
+                    kappa = seg.kappa(j); L = seg.L(j);
                     headingPrev = heading;
                     heading = heading + kappa * L;
                     headingCurr = heading;
@@ -138,7 +169,32 @@ classdef ArcMap < handle
             for i=1:n
                 disp(['[Segment ',num2str(i),']'])
                 initIntv = obj.segmentation(obj.segments{i},[1,length(obj.segments{i})],1);
-                obj.arc_segments = [obj.arc_segments {obj.mergeSeg(obj.segments{i},initIntv)}];
+                initSegments = obj.mergeSeg(obj.segments{i},initIntv);
+                initParams = struct();
+                initParams.kappa = [];
+                initParams.L = [];
+                
+                initStateIdx = obj.lane.FactorValidIntvs(obj.findColIdx(obj.segment_info,i),1);
+                initParams.x0 = obj.segments{i}(1,1);
+                initParams.y0 = obj.segments{i}(2,1);
+                rpy = dcm2rpy(obj.states{initStateIdx}.R);
+                initParams.tau0 = rpy(3); 
+                heading = initParams.tau0;
+
+                for j=1:length(initSegments)
+                    
+                    initParams.kappa = [initParams.kappa initSegments{j}.kappa];
+                    initParams.L = [initParams.L initSegments{j}.L];
+                    if j == 1
+                        initParams.xc = initParams.x0 - 1/initParams.kappa(end) * sin(heading);
+                        initParams.yc = initParams.y0 + 1/initParams.kappa(end) * cos(heading);
+                    else
+                        initParams.xc = [initParams.xc initParams.xc(end) + (1/initParams.kappa(end-1) - 1/initParams.kappa(end)) * sin(heading)];
+                        initParams.yc = [initParams.yc initParams.yc(end) - (1/initParams.kappa(end-1) - 1/initParams.kappa(end)) * cos(heading)];
+                    end
+                    heading = heading + initParams.kappa(end) * initParams.L(end);
+                end
+                obj.arc_segments = [obj.arc_segments {initParams}];
             end
         end
 
@@ -279,7 +335,7 @@ classdef ArcMap < handle
         end
         
         %% Data Association
-        function obj = associate(obj,init_flag)
+        function obj = associate(obj)
             % Data Association with current vehicle state and arc-spline
             % parameters. After each step in optimization, vehicle states
             % and arc parameters should be updated before re-association
@@ -287,24 +343,13 @@ classdef ArcMap < handle
             % Create arc segment node points before data association
             n = length(obj.arc_segments);
             for i=1:n
-                m = length(obj.arc_segments{i});
-                
-                if init_flag
-                    segment = obj.segments{i};
-
-                    % For initial data association, assign heading angle
-                    heading = atan2(segment(2,2)-segment(2,1),segment(1,2)-segment(1,1)); % Not very accurate
-                    % vehicle yaw angle from states
-
-                    segPoints = [obj.arc_segments{i}{1}.x + obj.arc_segments{i}{1}.R * cos(obj.arc_segments{i}{1}.th_init);
-                                 obj.arc_segments{i}{1}.y + obj.arc_segments{i}{1}.R * sin(obj.arc_segments{i}{1}.th_init)];
-                else
-
-                end
-                
-                for j=1:m
-                    seg = obj.arc_segments{i}{j};
-                    kappa = seg.kappa; L = seg.L;
+                m = length(obj.arc_segments{i}.kappa);
+                seg = obj.arc_segments{i};
+                heading = seg.tau0;
+                segPoints = [seg.x0;
+                             seg.y0];
+                for j=1:m                    
+                    kappa = seg.kappa(j); L = seg.L(j);
                     headingPrev = heading;
                     heading = heading + kappa * L;
                     headingCurr = heading;
@@ -360,9 +405,7 @@ classdef ArcMap < handle
                     end
                 end
             end
-
         end
-
         
     end
 
@@ -391,6 +434,7 @@ classdef ArcMap < handle
                 % If dP is not the largest, intersection point is not
                 % between the 2 node points, meaning that matching is not
                 % appropriate.
+
                 P1 = segPoints(:,i); P2 = segPoints(:,i+1);
                 dP = (P1 - P2)' * (P1 - P2);
                 
@@ -403,12 +447,13 @@ classdef ArcMap < handle
 
                 d1 = (P1 - P_intersect)' * (P1 - P_intersect);
                 d2 = (P2 - P_intersect)' * (P2 - P_intersect);
-
-                if max([dP,d1,d2]) == dP
+                [~,idx] = max([dP,d1,d2]);
+                if idx == 1
                     % Matching Success
                     % Compute arc center to vehicle distance
-                    arc_c = [segments{i}.x; segments{i}.y];
-                    dist = abs(sqrt(([xv;yv] - arc_c)' * ([xv;yv] - arc_c)) - abs(1/segments{i}.kappa));
+
+                    arc_c = [segments.xc(i); segments.yc(i)];
+                    dist = abs(sqrt(([xv;yv] - arc_c)' * ([xv;yv] - arc_c)) - abs(1/segments.kappa(i)));
                     
                     cand = [cand [i;dist]];
                 end
@@ -430,5 +475,6 @@ classdef ArcMap < handle
             [~,c] = find(arr==num);
             idx = min(c);
         end
+
     end
 end
