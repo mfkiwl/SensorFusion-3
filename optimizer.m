@@ -128,13 +128,15 @@ classdef optimizer < handle
             elseif strcmp(obj.mode,'partial')
                 obj.opt.x0 = zeros(16*n,1);
             elseif strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')                
-%                 num = length(obj.lane.FactorValidIdxs);                
-%                 obj.opt.x0 = zeros(16*n + 2*num*2*obj.lane.prev_num,1);
                 num = 0;
                 for i=1:length(obj.map.arc_segments)
                     num = num + 3 + 2 * length(obj.map.arc_segments{i}.kappa);
                     % x0, y0, tau0 of every segment are to be optimized
                     % kappa and L of every sub-segment are to be optimized
+                end
+                cumSum = cumsum(3 + 2*obj.map.subseg_cnt);
+                if num ~= cumSum(end)
+                    error('Number of variables are not matched')
                 end
                 obj.opt.x0 = zeros(16*n + num,1);
             end
@@ -147,7 +149,10 @@ classdef optimizer < handle
             elseif strcmp(obj.opt.options.Algorithm,'TR')
                 obj.TrustRegion();
             end
-
+            
+            % For arc spline based optimization, need to check validity of
+            % segments and add more segments, optimize again if current
+            % converged result is not appropriate
             
         end
             
@@ -516,7 +521,7 @@ classdef optimizer < handle
                 A = jac' * jac;
                 b = -jac' * res;
 
-                x0 = A \ b;
+                x0 = A \ b; 
                 
                 [res,jac] = obj.cost_func(x0);
 
@@ -868,53 +873,53 @@ classdef optimizer < handle
                     V(9*3+6+i) = InvMahalanobis(1,obj.covs.prior.WSF);
                 end       
 
-                if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
-                    % Lane Prior: Need to Check!
-                    Left_res = zeros(num * 3 * obj.lane.prev_num,1);
-                    Right_res = zeros(num * 3 * obj.lane.prev_num,1);
-                    
-                    I_L = zeros(1,num*3*obj.lane.prev_num);
-                    J_L = I_L; V_L = I_L;
-                    I_R = I_L; J_R = I_L; V_R = I_L;
-
-                    for i=1:num
-                        state_idx = obj.lane.FactorValidIdxs(i);
-                        lane_idx = obj.lane.state_idxs(state_idx);
-                        
-                        Adder = 3*obj.lane.prev_num*(i-1);    
-                        Adder2 = Adder + 3*obj.lane.prev_num*num;
-                        for j=1:obj.lane.prev_num    
-                            
-                            left = obj.states{state_idx}.left(:,j); % Only take y z coordinates
-                            right = obj.states{state_idx}.right(:,j); % Only take y z coordinates
-                            
-                            left_prior = [10*(j-1);obj.lane.ly(lane_idx,j);obj.lane.lz(lane_idx,j)];
-                            right_prior = [10*(j-1);obj.lane.ry(lane_idx,j);obj.lane.rz(lane_idx,j)];
-
-                            left_cov = diag([1e-10,obj.lane.lystd(lane_idx,j)^2,obj.lane.lzstd(lane_idx,j)^2]);
-                            right_cov = diag([1e-10,obj.lane.rystd(lane_idx,j)^2,obj.lane.rzstd(lane_idx,j)^2]);
-                            
-                            % Residual
-                            Left_res(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = InvMahalanobis(left - left_prior,left_cov);
-                            Right_res(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = InvMahalanobis(right - right_prior,right_cov);
-                            
-                            % Jacobian
-                            % Left Lane
-
-                            I_L(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = [Adder+3*(j-1)+1,Adder+3*(j-1)+2];
-                            J_L(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = [16*n+Adder+3*(j-1)+1,16*n+Adder+3*(j-1)+2];
-                            V_L(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = diag(InvMahalanobis(eye(3),left_cov));
-
-                            % Right Lane
-                            I_R(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = [Adder+3*(j-1)+1,Adder+3*(j-1)+2];
-                            J_R(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = [16*n+Adder2+3*(j-1)+1,16*n+Adder2+3*(j-1)+2];
-                            V_R(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = diag(InvMahalanobis(eye(3),right_cov));
-                        end
-                    end
-
-                    Left_jac = sparse(I_L,J_L,V_L,num * 3 * obj.lane.prev_num,blk_width);
-                    Right_jac = sparse(I_R,J_R,V_R,num * 3 * obj.lane.prev_num,blk_width);
-                end
+%                 if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
+%                     % Lane Prior: Need to Check!
+%                     Left_res = zeros(num * 3 * obj.lane.prev_num,1);
+%                     Right_res = zeros(num * 3 * obj.lane.prev_num,1);
+%                     
+%                     I_L = zeros(1,num*3*obj.lane.prev_num);
+%                     J_L = I_L; V_L = I_L;
+%                     I_R = I_L; J_R = I_L; V_R = I_L;
+% 
+%                     for i=1:num
+%                         state_idx = obj.lane.FactorValidIdxs(i);
+%                         lane_idx = obj.lane.state_idxs(state_idx);
+%                         
+%                         Adder = 3*obj.lane.prev_num*(i-1);    
+%                         Adder2 = Adder + 3*obj.lane.prev_num*num;
+%                         for j=1:obj.lane.prev_num    
+%                             
+%                             left = obj.states{state_idx}.left(:,j); % Only take y z coordinates
+%                             right = obj.states{state_idx}.right(:,j); % Only take y z coordinates
+%                             
+%                             left_prior = [10*(j-1);obj.lane.ly(lane_idx,j);obj.lane.lz(lane_idx,j)];
+%                             right_prior = [10*(j-1);obj.lane.ry(lane_idx,j);obj.lane.rz(lane_idx,j)];
+% 
+%                             left_cov = diag([1e-10,obj.lane.lystd(lane_idx,j)^2,obj.lane.lzstd(lane_idx,j)^2]);
+%                             right_cov = diag([1e-10,obj.lane.rystd(lane_idx,j)^2,obj.lane.rzstd(lane_idx,j)^2]);
+%                             
+%                             % Residual
+%                             Left_res(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = InvMahalanobis(left - left_prior,left_cov);
+%                             Right_res(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = InvMahalanobis(right - right_prior,right_cov);
+%                             
+%                             % Jacobian
+%                             % Left Lane
+% 
+%                             I_L(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = [Adder+3*(j-1)+1,Adder+3*(j-1)+2];
+%                             J_L(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = [16*n+Adder+3*(j-1)+1,16*n+Adder+3*(j-1)+2];
+%                             V_L(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = diag(InvMahalanobis(eye(3),left_cov));
+% 
+%                             % Right Lane
+%                             I_R(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = [Adder+3*(j-1)+1,Adder+3*(j-1)+2];
+%                             J_R(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = [16*n+Adder2+3*(j-1)+1,16*n+Adder2+3*(j-1)+2];
+%                             V_R(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = diag(InvMahalanobis(eye(3),right_cov));
+%                         end
+%                     end
+% 
+%                     Left_jac = sparse(I_L,J_L,V_L,num * 3 * obj.lane.prev_num,blk_width);
+%                     Right_jac = sparse(I_R,J_R,V_R,num * 3 * obj.lane.prev_num,blk_width);
+%                 end
             end
 %             disp(size(sparse(I,J,V,blk_height,blk_width)))
 %             disp(size(Left_jac))
@@ -1280,7 +1285,21 @@ classdef optimizer < handle
         
         %% Arc Spline based Measurement Residual and Jacobian
         function [AS_res,AS_jac] = CreateASBlock(obj)    
-
+            % Version 2: Arc Spline based model
+            % Point-PointMap matching is very inefficient and has
+            % association problems. Therefore all lanes are re-defined as
+            % combination of arc splines. This way, number of variables are
+            % reduced significantly. 
+            % Original Measurement Model: ~1M measurement and ~90k
+            % additional variables
+            % Current Measurement Model: ~40k measurment and ~200 
+            % additional variables
+            %
+            % ======================Issues======================
+            % Need Debugging! 
+            % * Check jacobian size is correct
+            % * Check cnt variables are correctly incremented
+            % * Check jacobian shape
            
             if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
                 AS_res = []; AS_jac = [];
@@ -1290,18 +1309,35 @@ classdef optimizer < handle
                 % computation is implemented for this block
                 % For computation speed, forward-difference is adopted
                 
-                
+                blk_heightL = nnz(obj.map.assocL);
+                blk_heightR = nnz(obj.map.assocR);
+                AS_resL = zeros(blk_heightL);
+                AS_resR = zeros(blk_heightR);
+                subsegcolIdxs = [1 1 + cumsum(3 + 2*obj.map.subseg_cnt(1:end-1))]; % Each segment's column starting index
+                cumSum = cumsum(3 + 2*obj.map.subseg_cnt);
+                blk_width = cumSum(end);
+
+                I_L = zeros(9*blk_heightL + 2 * sum(obj.map.assocL,'all'),1);
+                J_L = I_L; V_L = I_L;
+
+                I_R = zeros(9*blk_heightR + 2 * sum(obj.map.assocR,'all'),1);
+                J_R = I_R; V_R = I_R;
+
+                cntL = 1; cntR = 1;
+                cntJacL = 0; cntJacR = 0; 
                 n = size(obj.lane.FactorValidIntvs,1);
+                m = length(obj.states);
                 for i=1:n
                     lb = obj.lane.FactorValidIntvs(i,1);
                     ub = obj.lane.FactorValidIntvs(i,2);
                     leftSegIdx = obj.map.segment_info(1,i);
                     rightSegIdx = obj.map.segment_info(2,i);
                     
-                    leftSeg = obj.map.arc_segment{leftSegIdx};
-                    rightSeg = obj.map.arc_segment{rightSegIdx};
+                    leftSeg = obj.map.arc_segments{leftSegIdx};
+                    rightSeg = obj.map.arc_segments{rightSegIdx};
 
                     for j=lb:ub
+                        disp(j)
                         R = obj.states{j}.R;
                         P = obj.states{j}.P;
 
@@ -1314,11 +1350,27 @@ classdef optimizer < handle
                                 initParams = [leftSeg.x0, leftSeg.y0, leftSeg.tau0];
                                 Params = [leftSeg.kappa; leftSeg.L];
                                 
-                                lane_idx = obj.lane.state_idxs(j);   
-                                
+                                lane_idx = obj.lane.state_idxs(j);                                   
                                 [r_jac,p_jac,param_jac,anchored_res] = obj.getASJac(R,P,initParams,Params,subSegIdxL,lane_idx,k,'left');
+                                % Output jacobians are already normalized
                                 
+                                % Residual
+                                AS_resL(cntL) = anchored_res;
                                 
+                                % Jacobian
+                                [I_rL,J_rL,V_rL] = sparseFormat(cntL,9*(j-1)+1:9*(j-1)+3,r_jac);
+                                [I_pL,J_pL,V_pL] = sparseFormat(cntL,9*(j-1)+7:9*(j-1)+9,p_jac);
+                                segIdxL = subsegcolIdxs(leftSegIdx);
+                                num = 3+2*obj.map.subseg_cnt(leftSegIdx)-1;
+                                % Jacobian for one full segment
+                                [I_PL,J_PL,V_PL] = sparseFormat(cntL,16*m+segIdxL:16*m+segIdxL+num,param_jac);
+                                
+                                I_L(cntJacL+1:cntJacL+9+2*obj.map.subseg_cnt(leftSegIdx)) = [I_rL I_pL I_PL];
+                                J_L(cntJacL+1:cntJacL+9+2*obj.map.subseg_cnt(leftSegIdx)) = [J_rL J_pL J_PL];
+                                V_L(cntJacL+1:cntJacL+9+2*obj.map.subseg_cnt(leftSegIdx)) = [V_rL V_pL V_PL];
+
+                                cntL = cntL + 1;
+                                cntJacL = cntJacL + 9+2*obj.map.subseg_cnt(leftSegIdx);
                             end
 
                             % Right
@@ -1327,15 +1379,35 @@ classdef optimizer < handle
                                 Params = [rightSeg.kappa; rightSeg.L];
                                 
                                 lane_idx = obj.lane.state_idxs(j);
-                                cov = obj.lane.rystd(lane_idx,k)^2;
                                 [r_jac,p_jac,param_jac,anchored_res] = obj.getASJac(R,P,initParams,Params,subSegIdxL,lane_idx,k,'right');
+                                % Output jacobians are already normalized
                                 
-                            
+                                % Residual
+                                AS_resR(cntR) = anchored_res;
+                                
+                                % Jacobian
+                                [I_rR,J_rR,V_rR] = sparseFormat(cntR,9*(j-1)+1:9*(j-1)+3,r_jac);
+                                [I_pR,J_pR,V_pR] = sparseFormat(cntR,9*(j-1)+7:9*(j-1)+9,p_jac);
+                                segIdxR = subsegcolIdxs(rightSegIdx);
+                                num = 3+2*obj.map.subseg_cnt(rightSegIdx)-1;
+                                % Jacobian for one full segment
+                                [I_PR,J_PR,V_PR] = sparseFormat(cntR,16*m+segIdxR:16*m+segIdxR+num,param_jac);
+                                
+                                I_R(cntJacR+1:cntJacR+9+2*obj.map.subseg_cnt(rightSegIdx)) = [I_rR I_pR I_PR];
+                                J_R(cntJacR+1:cntJacR+9+2*obj.map.subseg_cnt(rightSegIdx)) = [J_rR J_pR J_PR];
+                                V_R(cntJacR+1:cntJacR+9+2*obj.map.subseg_cnt(rightSegIdx)) = [V_rR V_pR V_PR];
+
+                                cntR = cntR + 1;
+                                cntJacR = cntJacR + 9+2*obj.map.subseg_cnt(rightSegIdx);
                             end
                         end
-                    end
-                    
+                    end                    
                 end
+                AS_jacL = sparse(I_L,J_L,V_L,blk_heightL,blk_width);
+                AS_jacR = sparse(I_R,J_R,V_R,blk_heightR,blk_width);
+
+                AS_res = vertcat(AS_resL,AS_resR);
+                AS_jac = vertcat(AS_jacL,AS_jacR);
             end
         end
 
@@ -1354,11 +1426,8 @@ classdef optimizer < handle
                 obj.retractWSF(wsf_delta);
                 
                 if strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
-                    % To be done
-%                     num = length(obj.lane.FactorValidIdxs);
-%                     left_delta = delta(16*n+1:16*n+num*3*obj.lane.prev_num);
-%                     right_delta = delta(16*n+num*3*obj.lane.prev_num+1:16*n+3*num*2*obj.lane.prev_num);
-%                     obj.retractLane(left_delta,right_delta);
+                    arc_delta = delta(16*n+1:end); % Change this part if more models are added
+                    obj.retractLane(arc_delta);
                 end
             end
             
@@ -1459,17 +1528,28 @@ classdef optimizer < handle
         end
         
         %% Lane Retraction
-        function obj = retractLane(obj,left_delta,right_delta)
-            % To be done
-%             num = length(obj.lane.FactorValidIdxs);
-%             for i=1:num
-%                 state_idx = obj.lane.FactorValidIdxs(i);
-%                 left_sample = reshape(left_delta(3*(i-1)*obj.lane.prev_num+1:3*i*obj.lane.prev_num),3,obj.lane.prev_num);
-%                 right_sample = reshape(right_delta(3*(i-1)*obj.lane.prev_num+1:3*i*obj.lane.prev_num),3,obj.lane.prev_num);
-% 
-%                 obj.states{state_idx}.left = obj.states{state_idx}.left + left_sample;
-%                 obj.states{state_idx}.right = obj.states{state_idx}.right + right_sample;
-%             end
+        function obj = retractLane(obj,arc_delta)
+            % Classify delta values according to segment number
+            cnt = 0;
+            arc_delta_params = {};
+            
+            for i=1:length(obj.map.subseg_cnt)
+                delta_params = struct();
+                num_subseg = obj.map.subseg_cnt(i);
+                subseg_vars = arc_delta(cnt+1:cnt+3+2*num_subseg);
+
+                delta_params.x0 = subseg_vars(1);
+                delta_params.y0 = subseg_vars(2);
+                delta_params.tau0 = subseg_vars(3);
+                
+                kappaL = subseg_vars(4:end)';
+                delta_params.kappa = kappaL(1:2:end);
+                delta_params.L = kappaL(2:2:end);
+                
+                arc_delta_params = [arc_delta_params {delta_params}];
+                cnt = cnt + 3 + 2 * num_subseg;
+            end
+            obj.map.update(obj.states,arc_delta_params)
         end
 
         %% Arc Spline based Numerical Jacobian Computation
@@ -1483,7 +1563,7 @@ classdef optimizer < handle
             anchored_res = obj.getASRes(R,P,initParams,Params,subSegIdx,lane_idx,k,dir);
 
             r_jac = zeros(1,3); p_jac = zeros(1,3); 
-            param_jac = zeros(1,3+2*numel(Params));
+            param_jac = zeros(1,3+numel(Params));
             if strcmp(dir,'left')
                 cov = obj.lane.lystd(lane_idx,k)^2;
             else

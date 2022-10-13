@@ -93,7 +93,7 @@ sol.full = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options
 sol.full.optimize();
 %%
 sol.full.update('2-phase') % Update mode to 2-phase
-% sol.full.optimize();
+sol.full.optimize();
 % sol.full.visualize();
 
-sol.full.map.visualize2DMap();
+% sol.full.map.visualize2DMap();

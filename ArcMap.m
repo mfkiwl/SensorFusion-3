@@ -13,6 +13,7 @@ classdef ArcMap < handle
         lane_prob_thres
         assocL
         assocR
+        subseg_cnt = []
         dummy = struct() % Dummy variable for debugging
     end
     
@@ -35,51 +36,39 @@ classdef ArcMap < handle
         end
         
         %% Map Update
-        function obj = update(obj,states,arc_params)
+        function obj = update(obj,states,arc_delta_params)
             % Update variables after iterative optimization step
             % Input variable format
             % states: cell-struct --> copy of state variable
             % arc_params: cell-struct --> processed 
             obj.states = states;
             
-            if length(obj.arc_segments) ~= length(arc_params)
+            if length(obj.arc_segments) ~= length(arc_delta_params)
                 error('Length of processed arc parameters are inappropriate')
             end
-
+            
             % Re-initialize variables
+            % Need to be careful if number of arc segments is changed
             for i=1:length(obj.arc_segments)                
-                obj.arc_segments{i}.kappa = arc_params{i}.kappa;
-                obj.arc_segments{i}.L = arc_params{i}.L;
-                obj.arc_segments{i}.x0 = arc_params{i}.x0;
-                obj.arc_segments{i}.y0 = arc_params{i}.y0;
-                obj.arc_segments{i}.tau0 = arc_params{i}.tau0;
+                obj.arc_segments{i}.kappa = obj.arc_segments{i}.kappa + arc_delta_params{i}.kappa;
+                obj.arc_segments{i}.L = obj.arc_segments{i}.L + arc_delta_params{i}.L;
+                obj.arc_segments{i}.x0 = obj.arc_segments{i}.x0 + arc_delta_params{i}.x0;
+                obj.arc_segments{i}.y0 = obj.arc_segments{i}.y0 + arc_delta_params{i}.y0;
+                obj.arc_segments{i}.tau0 = obj.arc_segments{i}.tau0 + arc_delta_params{i}.tau0;
                 
                 [obj.arc_segments{i}.xc, obj.arc_segments{i}.yc] = obj.getCenter(obj.arc_segments{i}.x0,...
                                                                                  obj.arc_segments{i}.y0,...
                                                                                  obj.arc_segments{i}.tau0,...
                                                                                  obj.arc_segments{i}.kappa,...
                                                                                  obj.arc_segments{i}.L);
+                obj.subseg_cnt(i) = length(arc_delta_params{i}.kappa);
             end
 
             % Perform data association with updated variables
             obj.associate();
         end
 
-        %% Compute center points of arcs, given parameters
-        function [xc,yc] = getCenter(x0,y0,tau0,kappa,L)
-            heading = tau0;
-            xc = []; yc = [];
-            for j=1:length(kappa)
-                if j == 1
-                    xc = x0 - 1/kappa(j) * sin(heading);
-                    yc = y0 + 1/kappa(j) * cos(heading);
-                else
-                    xc = [xc xc(end) + (1/kappa(j-1) - 1/kappa(j)) * sin(heading)];
-                    yc = [yc yc(end) - (1/kappa(j-1) - 1/kappa(j)) * cos(heading)];
-                end
-                heading = heading + kappa(j) * L(j);
-            end
-        end
+        
 
         %% Map Visualization (2D Segmentwise Point Map)
         function obj = visualize2DMap(obj)
@@ -203,7 +192,10 @@ classdef ArcMap < handle
                     heading = heading + initParams.kappa(end) * initParams.L(end);
                 end
                 obj.arc_segments = [obj.arc_segments {initParams}];
+                obj.subseg_cnt = [obj.subseg_cnt length(initParams.kappa)];
             end
+            
+
         end
 
         %% Initial segmentation
@@ -476,7 +468,23 @@ classdef ArcMap < handle
                 segIdx = 0;
             end
         end
-
+        
+        %% Compute center points of arcs, given parameters
+        function [xc,yc] = getCenter(x0,y0,tau0,kappa,L)
+            heading = tau0;
+            xc = []; yc = [];
+            for j=1:length(kappa)
+                if j == 1
+                    xc = x0 - 1/kappa(j) * sin(heading);
+                    yc = y0 + 1/kappa(j) * cos(heading);
+                else
+                    xc = [xc xc(end) + (1/kappa(j-1) - 1/kappa(j)) * sin(heading)];
+                    yc = [yc yc(end) - (1/kappa(j-1) - 1/kappa(j)) * cos(heading)];
+                end
+                heading = heading + kappa(j) * L(j);
+            end
+        end
+        
         %% Find minimum column index for first appearance
         function idx = findColIdx(arr,num)
             % Find the first column in arr where num first appears
