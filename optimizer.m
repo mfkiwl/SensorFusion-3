@@ -24,6 +24,7 @@ classdef optimizer < handle
 % [Methods] : using OPTIMIZER 
 % * optimize() : Find optimized solution to SNLS problem
 % * visualize() : Plot optimization results
+% * update() : Update optimization mode and use previous optimized results
 % * Other function methods are not designed to be used outside of this script 
 %
 % Implemented by JinHwan Jeon, 2022
@@ -127,9 +128,15 @@ classdef optimizer < handle
             elseif strcmp(obj.mode,'partial')
                 obj.opt.x0 = zeros(16*n,1);
             elseif strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')                
-                num = length(obj.lane.FactorValidIdxs);                
-                obj.opt.x0 = zeros(16*n + 2*num*2*obj.lane.prev_num,1);
-
+%                 num = length(obj.lane.FactorValidIdxs);                
+%                 obj.opt.x0 = zeros(16*n + 2*num*2*obj.lane.prev_num,1);
+                num = 0;
+                for i=1:length(obj.map.arc_segments)
+                    num = num + 3 + 2 * length(obj.map.arc_segments{i}.kappa);
+                    % x0, y0, tau0 of every segment are to be optimized
+                    % kappa and L of every sub-segment are to be optimized
+                end
+                obj.opt.x0 = zeros(16*n + num,1);
             end
             
             % Run optimization depending on algorithm options
@@ -782,10 +789,11 @@ classdef optimizer < handle
             [MM_res,MM_jac] = obj.CreateMMBlock();
             [GNSS_res,GNSS_jac] = obj.CreateGNSSBlock();
             [WSS_res,WSS_jac] = obj.CreateWSSBlock();
-            [ME_res,ME_jac] = obj.CreateMEBlock();
+%             [ME_res,ME_jac] = obj.CreateMEBlock(); % Deprecated
+            [AS_res,AS_jac] = obj.CreateASBlock();
             
-            res = vertcat(Pr_res,MM_res,GNSS_res,WSS_res,ME_res);
-            jac = vertcat(Pr_jac,MM_jac,GNSS_jac,WSS_jac,ME_jac);            
+            res = vertcat(Pr_res,MM_res,GNSS_res,WSS_res,AS_res);
+            jac = vertcat(Pr_jac,MM_jac,GNSS_jac,WSS_jac,AS_jac);            
         end
         
         %% Prior Residual and Jacobian
@@ -1113,7 +1121,7 @@ classdef optimizer < handle
             end
         end
         
-        %% Naive Lane Measurement Residual and Jacobian
+        %% Naive Lane Measurement Residual and Jacobian -- Deprecated
         function [ME_res,ME_jac] = CreateMEBlock(obj)
             % Version 1: Naive Model (No lane merging)
             % 3 Dimensional Model, but only y, z coords are optimization
@@ -1271,8 +1279,64 @@ classdef optimizer < handle
         end
         
         %% Arc Spline based Measurement Residual and Jacobian
-        function [LA_res,LA_jac] = CreateLABlock(obj)
-            % To be done
+        function [AS_res,AS_jac] = CreateASBlock(obj)    
+
+           
+            if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
+                AS_res = []; AS_jac = [];
+            else
+                % Due to the complexity of computing jacobian of
+                % measurement function algebraically, numerical jacobian
+                % computation is implemented for this block
+                % For computation speed, forward-difference is adopted
+                
+                
+                n = size(obj.lane.FactorValidIntvs,1);
+                for i=1:n
+                    lb = obj.lane.FactorValidIntvs(i,1);
+                    ub = obj.lane.FactorValidIntvs(i,2);
+                    leftSegIdx = obj.map.segment_info(1,i);
+                    rightSegIdx = obj.map.segment_info(2,i);
+                    
+                    leftSeg = obj.map.arc_segment{leftSegIdx};
+                    rightSeg = obj.map.arc_segment{rightSegIdx};
+
+                    for j=lb:ub
+                        R = obj.states{j}.R;
+                        P = obj.states{j}.P;
+
+                        for k=1:obj.lane.prev_num
+                            subSegIdxL = obj.map.assocL(j,k);
+                            subSegIdxR = obj.map.assocR(j,k);
+                            
+                            % Left 
+                            if subSegIdxL > 0 % Valid Measurement                                
+                                initParams = [leftSeg.x0, leftSeg.y0, leftSeg.tau0];
+                                Params = [leftSeg.kappa; leftSeg.L];
+                                
+                                lane_idx = obj.lane.state_idxs(j);   
+                                
+                                [r_jac,p_jac,param_jac,anchored_res] = obj.getASJac(R,P,initParams,Params,subSegIdxL,lane_idx,k,'left');
+                                
+                                
+                            end
+
+                            % Right
+                            if subSegIdxR > 0 % Valid Measurement
+                                initParams = [rightSeg.x0, rightSeg.y0, rightSeg.tau0];
+                                Params = [rightSeg.kappa; rightSeg.L];
+                                
+                                lane_idx = obj.lane.state_idxs(j);
+                                cov = obj.lane.rystd(lane_idx,k)^2;
+                                [r_jac,p_jac,param_jac,anchored_res] = obj.getASJac(R,P,initParams,Params,subSegIdxL,lane_idx,k,'right');
+                                
+                            
+                            end
+                        end
+                    end
+                    
+                end
+            end
         end
 
         %% Retraction
@@ -1406,6 +1470,128 @@ classdef optimizer < handle
 %                 obj.states{state_idx}.left = obj.states{state_idx}.left + left_sample;
 %                 obj.states{state_idx}.right = obj.states{state_idx}.right + right_sample;
 %             end
+        end
+
+        %% Arc Spline based Numerical Jacobian Computation
+        function [r_jac,p_jac,param_jac,anchored_res] = getASJac(obj,R,P,initParams,Params,subSegIdx,lane_idx,k,dir)
+            % Returns normalized jacobian and residual
+            % Jacobian is computed numerically
+            % param_jac is jacobian for the segment of interest, not the
+            % total parameter jacobian
+
+            eps = 1e-8; % Numerical Jacobian step size
+            anchored_res = obj.getASRes(R,P,initParams,Params,subSegIdx,lane_idx,k,dir);
+
+            r_jac = zeros(1,3); p_jac = zeros(1,3); 
+            param_jac = zeros(1,3+2*numel(Params));
+            if strcmp(dir,'left')
+                cov = obj.lane.lystd(lane_idx,k)^2;
+            else
+                cov = obj.lane.rystd(lane_idx,k)^2;
+            end
+            
+            % Add perturbation to all variables of
+            % interest to find jacobian
+
+            % 1: Perturbation to Rotational Matrix
+
+            for i=1:3
+                rot_ptb_vec = zeros(3,1);
+                rot_ptb_vec(i) = eps;
+                R_ptb = R * Exp_map(rot_ptb_vec); 
+
+                res_ptb = obj.getASRes(R_ptb,P,initParams,Params,subSegIdx,lane_idx,k,dir);
+                r_jac(i) = (res_ptb - anchored_res)/eps;
+            end
+            r_jac = InvMahalanobis(r_jac,cov);
+
+            % 2: Perturbation to Position
+            
+            for i=1:3
+                pos_ptb_vec = zeros(3,1);
+                pos_ptb_vec(i) = eps;
+                P_ptb = P + R * pos_ptb_vec;
+
+                res_ptb = obj.getASRes(R,P_ptb,initParams,Params,subSegIdx,lane_idx,k,dir);
+                p_jac(i) = (res_ptb - anchored_res)/eps;
+            end
+            p_jac = InvMahalanobis(p_jac,cov);
+
+            % 3: Perturbation to Segment initParams
+            for i=1:3
+                initParams_ptb_vec = zeros(1,3);
+                initParams_ptb_vec(i) = eps;
+                initParams_ptb = initParams + initParams_ptb_vec;
+
+                res_ptb = obj.getASRes(R,P,initParams_ptb,Params,subSegIdx,lane_idx,k,dir);
+                param_jac(i) = (res_ptb - anchored_res)/eps;
+            end
+
+            % 4: Perturbation to Sub-Segment Params
+            for j=1:subSegIdx
+                % For sub-segment parameter perturbation, variables "after"
+                % the target sub-segment index are not used!
+                
+                for i=1:2
+                    Params_ptb_vec = zeros(size(Params));
+                    Params_ptb_vec(i,j) = eps;
+                    Params_ptb = Params + Params_ptb_vec;
+
+                    res_ptb = obj.getASRes(R,P,initParams,Params_ptb,subSegIdx,lane_idx,k,dir);
+                    param_jac(3+2*(j-1)+i) = (res_ptb - anchored_res)/eps;
+                end
+            end
+            param_jac = InvMahalanobis(param_jac,cov);
+            
+            anchored_res = InvMahalanobis(anchored_res,cov);
+        end
+
+        %% Arc Spline based measurement residual 
+        function res = getASRes(obj,Ri,Pi,initParams,Params,subSegIdx,lane_idx,k,dir)
+            % Computing residual for given current state/arc parameter
+            % variables
+            % * This function can further be optimized by propagating 
+            % center point of circle only when arc parameters are changed
+            % by perturbation
+            % Currently, optimizing function flow is not predicted to
+            % speed up the code substantially. If jacobian computation is 
+            % too slow, try modifying this part.
+            
+            rpy = dcm2rpy(Ri); psi = rpy(3);
+            R2d = [cos(psi) -sin(psi);
+                   sin(psi) cos(psi)];
+
+            % Propgate arc center point until the matched sub-segment 
+            x0 = initParams(1); y0 = initParams(2); tau0 = initParams(3);
+            kappas = Params(1,:); Ls = Params(2,:);
+            heading = tau0;
+            for i=1:subSegIdx
+                if i == 1
+                    Xc = [x0 - 1/kappas(i) * sin(heading);
+                          y0 + 1/kappas(i) * cos(heading)];
+                else
+                    Xc = Xc + (1/kappas(i-1) - 1/kappas(i)) * [sin(heading);
+                                                               -cos(heading)];
+                end
+                heading = heading + kappas(i) * Ls(i);
+            end
+            
+            Xc_b = R2d' * (Xc - Pi(1:2)); xc_b = Xc_b(1); yc_b = Xc_b(2);
+            kappa = kappas(subSegIdx);
+            
+            if strcmp(dir,'left')
+                dij = obj.lane.ly(lane_idx,k);
+            elseif strcmp(dir,'right')
+                dij = obj.lane.ry(lane_idx,k);
+            end
+
+            % WARNING! Need to double check if this logic is appropriate
+            % Computing "distance" residual
+            if kappa > 0
+                res = yc_b - sqrt((1/kappa)^2 - (10*(k-1) - xc_b)^2) - dij;
+            else
+                res = yc_b + sqrt((1/kappa)^2 - (10*(k-1) - xc_b)^2) - dij;
+            end
         end
 
     end

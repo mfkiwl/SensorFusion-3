@@ -54,23 +54,31 @@ classdef ArcMap < handle
                 obj.arc_segments{i}.y0 = arc_params{i}.y0;
                 obj.arc_segments{i}.tau0 = arc_params{i}.tau0;
                 
-                heading = obj.arc_segments{i}.tau0;
-                obj.arc_segments{i}.xc = [];
-                obj.arc_segments{i}.yc = [];
-                for j=1:length(obj.arc_segments{i}.kappa)                    
-                    if j==1
-                        obj.arc_segments{i}.xc = obj.arc_segments{i}.x0 - 1/obj.arc_segments{i}.kappa(j) * sin(heading);
-                        obj.arc_segments{i}.yc = obj.arc_segments{i}.y0 + 1/obj.arc_segments{i}.kappa(j) * cos(heading);
-                    else
-                        obj.arc_segments{i}.xc = [obj.arc_segments{i}.xc obj.arc_segments{i}.xc(end) + (1/obj.arc_segments{i}.kappa(j-1) - 1/obj.arc_segments{i}.kappa(j)) * sin(heading)];
-                        obj.arc_segments{i}.yc = [obj.arc_segments{i}.yc obj.arc_segments{i}.yc(end) - (1/obj.arc_segments{i}.kappa(j-1) - 1/obj.arc_segments{i}.kappa(j)) * cos(heading)];
-                    end
-                    heading = heading + obj.arc_segments{i}.kappa(j) * obj.arc_segments{i}.L(j);
-                end
+                [obj.arc_segments{i}.xc, obj.arc_segments{i}.yc] = obj.getCenter(obj.arc_segments{i}.x0,...
+                                                                                 obj.arc_segments{i}.y0,...
+                                                                                 obj.arc_segments{i}.tau0,...
+                                                                                 obj.arc_segments{i}.kappa,...
+                                                                                 obj.arc_segments{i}.L);
             end
 
             % Perform data association with updated variables
             obj.associate();
+        end
+
+        %% Compute center points of arcs, given parameters
+        function [xc,yc] = getCenter(x0,y0,tau0,kappa,L)
+            heading = tau0;
+            xc = []; yc = [];
+            for j=1:length(kappa)
+                if j == 1
+                    xc = x0 - 1/kappa(j) * sin(heading);
+                    yc = y0 + 1/kappa(j) * cos(heading);
+                else
+                    xc = [xc xc(end) + (1/kappa(j-1) - 1/kappa(j)) * sin(heading)];
+                    yc = [yc yc(end) - (1/kappa(j-1) - 1/kappa(j)) * cos(heading)];
+                end
+                heading = heading + kappa(j) * L(j);
+            end
         end
 
         %% Map Visualization (2D Segmentwise Point Map)
