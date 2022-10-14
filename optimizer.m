@@ -796,7 +796,7 @@ classdef optimizer < handle
             [WSS_res,WSS_jac] = obj.CreateWSSBlock();
 %             [ME_res,ME_jac] = obj.CreateMEBlock(); % Deprecated
             [AS_res,AS_jac] = obj.CreateASBlock();
-            
+%             error('1');
             res = vertcat(Pr_res,MM_res,GNSS_res,WSS_res,AS_res);
             jac = vertcat(Pr_jac,MM_jac,GNSS_jac,WSS_jac,AS_jac);            
         end
@@ -810,15 +810,13 @@ classdef optimizer < handle
 
             if strcmp(obj.mode,'partial')
                 blk_width = blk_width + n;
-                adder = n ;
-                
+                adder = n ;                
                 blk_height = blk_height + n;
             elseif strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
                 % Add prev_num states
-                num = length(obj.lane.FactorValidIdxs);
                 blk_height = blk_height + n;
-                blk_width = 16*n + 2 * num * 2 * obj.lane.prev_num;
                 adder = n;
+                blk_width = length(obj.opt.x0);
             end
 
             Veh_cov = blkdiag(obj.covs.prior.R,obj.covs.prior.V,obj.covs.prior.P);
@@ -860,8 +858,6 @@ classdef optimizer < handle
             V(9*3+1:9*3+6) = [V_1b V_2b];
             
             WSS_res = []; 
-            Left_res = []; Right_res = [];
-            Left_jac = []; Right_jac = [];
             if ~strcmp(obj.mode,'basic')
                 % WSF Prior
                 WSS_res = zeros(n,1);
@@ -872,60 +868,9 @@ classdef optimizer < handle
                     J(9*3+6+i) = 15*n+i;
                     V(9*3+6+i) = InvMahalanobis(1,obj.covs.prior.WSF);
                 end       
-
-%                 if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
-%                     % Lane Prior: Need to Check!
-%                     Left_res = zeros(num * 3 * obj.lane.prev_num,1);
-%                     Right_res = zeros(num * 3 * obj.lane.prev_num,1);
-%                     
-%                     I_L = zeros(1,num*3*obj.lane.prev_num);
-%                     J_L = I_L; V_L = I_L;
-%                     I_R = I_L; J_R = I_L; V_R = I_L;
-% 
-%                     for i=1:num
-%                         state_idx = obj.lane.FactorValidIdxs(i);
-%                         lane_idx = obj.lane.state_idxs(state_idx);
-%                         
-%                         Adder = 3*obj.lane.prev_num*(i-1);    
-%                         Adder2 = Adder + 3*obj.lane.prev_num*num;
-%                         for j=1:obj.lane.prev_num    
-%                             
-%                             left = obj.states{state_idx}.left(:,j); % Only take y z coordinates
-%                             right = obj.states{state_idx}.right(:,j); % Only take y z coordinates
-%                             
-%                             left_prior = [10*(j-1);obj.lane.ly(lane_idx,j);obj.lane.lz(lane_idx,j)];
-%                             right_prior = [10*(j-1);obj.lane.ry(lane_idx,j);obj.lane.rz(lane_idx,j)];
-% 
-%                             left_cov = diag([1e-10,obj.lane.lystd(lane_idx,j)^2,obj.lane.lzstd(lane_idx,j)^2]);
-%                             right_cov = diag([1e-10,obj.lane.rystd(lane_idx,j)^2,obj.lane.rzstd(lane_idx,j)^2]);
-%                             
-%                             % Residual
-%                             Left_res(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = InvMahalanobis(left - left_prior,left_cov);
-%                             Right_res(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = InvMahalanobis(right - right_prior,right_cov);
-%                             
-%                             % Jacobian
-%                             % Left Lane
-% 
-%                             I_L(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = [Adder+3*(j-1)+1,Adder+3*(j-1)+2];
-%                             J_L(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = [16*n+Adder+3*(j-1)+1,16*n+Adder+3*(j-1)+2];
-%                             V_L(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = diag(InvMahalanobis(eye(3),left_cov));
-% 
-%                             % Right Lane
-%                             I_R(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = [Adder+3*(j-1)+1,Adder+3*(j-1)+2];
-%                             J_R(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = [16*n+Adder2+3*(j-1)+1,16*n+Adder2+3*(j-1)+2];
-%                             V_R(Adder+3*(j-1)+1:Adder+3*(j-1)+2) = diag(InvMahalanobis(eye(3),right_cov));
-%                         end
-%                     end
-% 
-%                     Left_jac = sparse(I_L,J_L,V_L,num * 3 * obj.lane.prev_num,blk_width);
-%                     Right_jac = sparse(I_R,J_R,V_R,num * 3 * obj.lane.prev_num,blk_width);
-%                 end
-            end
-%             disp(size(sparse(I,J,V,blk_height,blk_width)))
-%             disp(size(Left_jac))
-%             disp(size(Right_jac))
-            Pr_res = [Veh_res; Bias_res; WSS_res;Left_res;Right_res];
-            Pr_jac = [sparse(I,J,V,blk_height,blk_width);Left_jac;Right_jac];
+            end            
+            Pr_res = [Veh_res; Bias_res; WSS_res];
+            Pr_jac = sparse(I,J,V,blk_height,blk_width);
         end
         
         %% IMU Residual and Jacobian
@@ -942,8 +887,7 @@ classdef optimizer < handle
                 WSF_res = zeros(n-1,1);
 
                 if strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
-                    num = length(obj.lane.FactorValidIdxs);
-                    blk_width = 16*n + 2*num*2*obj.lane.prev_num;
+                    blk_width = length(obj.opt.x0);
                 end
             end
             
@@ -1051,8 +995,7 @@ classdef optimizer < handle
             if strcmp(obj.mode,'partial')
                 blk_width = blk_width + m;
             elseif strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
-                num = length(obj.lane.FactorValidIdxs);
-                blk_width = 16*m + 2*num*2*obj.lane.prev_num;
+                blk_width = length(obj.opt.x0);
             end
             blk_height = 3*n;
             GNSS_res = zeros(blk_height,1);
@@ -1087,8 +1030,7 @@ classdef optimizer < handle
                 blk_width = 16*n;
                 
                 if strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
-                    num = length(obj.lane.FactorValidIdxs);
-                    blk_width = 16*n + 2*num*2*obj.lane.prev_num;
+                    blk_width = length(obj.opt.x0);
                 end
                 
                 L = obj.params;
@@ -1292,7 +1234,7 @@ classdef optimizer < handle
             % reduced significantly. 
             % Original Measurement Model: ~1M measurement and ~90k
             % additional variables
-            % Current Measurement Model: ~40k measurment and ~200 
+            % Current Measurement Model: ~60k measurment and ~130 
             % additional variables
             %
             % ======================Issues======================
@@ -1300,6 +1242,14 @@ classdef optimizer < handle
             % * Check jacobian size is correct
             % * Check cnt variables are correctly incremented
             % * Check jacobian shape
+            %
+            % =====================Debugging=====================
+            %
+            % #1 Singularity occurs in jacobian
+            % Things to check: 
+            % 1) Denormalized error is correctly matched? --> Check Logic
+            % 2) Jacobian shape error? 
+            % 3) Simple Implementation error? --> retraction, etc
            
             if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
                 AS_res = []; AS_jac = [];
@@ -1308,14 +1258,16 @@ classdef optimizer < handle
                 % measurement function algebraically, numerical jacobian
                 % computation is implemented for this block
                 % For computation speed, forward-difference is adopted
-                
+                n = size(obj.lane.FactorValidIntvs,1);
+                m = length(obj.states);
+
                 blk_heightL = nnz(obj.map.assocL);
                 blk_heightR = nnz(obj.map.assocR);
-                AS_resL = zeros(blk_heightL);
-                AS_resR = zeros(blk_heightR);
+                AS_resL = zeros(blk_heightL,1);
+                AS_resR = zeros(blk_heightR,1);
                 subsegcolIdxs = [1 1 + cumsum(3 + 2*obj.map.subseg_cnt(1:end-1))]; % Each segment's column starting index
                 cumSum = cumsum(3 + 2*obj.map.subseg_cnt);
-                blk_width = cumSum(end);
+                blk_width = 16 * m + cumSum(end);
 
                 I_L = zeros(9*blk_heightL + 2 * sum(obj.map.assocL,'all'),1);
                 J_L = I_L; V_L = I_L;
@@ -1325,8 +1277,7 @@ classdef optimizer < handle
 
                 cntL = 1; cntR = 1;
                 cntJacL = 0; cntJacR = 0; 
-                n = size(obj.lane.FactorValidIntvs,1);
-                m = length(obj.states);
+                
                 for i=1:n
                     lb = obj.lane.FactorValidIntvs(i,1);
                     ub = obj.lane.FactorValidIntvs(i,2);
@@ -1337,9 +1288,10 @@ classdef optimizer < handle
                     rightSeg = obj.map.arc_segments{rightSegIdx};
 
                     for j=lb:ub
-                        disp(j)
+                        
                         R = obj.states{j}.R;
                         P = obj.states{j}.P;
+                        lane_idx = obj.lane.state_idxs(j);
 
                         for k=1:obj.lane.prev_num
                             subSegIdxL = obj.map.assocL(j,k);
@@ -1349,8 +1301,7 @@ classdef optimizer < handle
                             if subSegIdxL > 0 % Valid Measurement                                
                                 initParams = [leftSeg.x0, leftSeg.y0, leftSeg.tau0];
                                 Params = [leftSeg.kappa; leftSeg.L];
-                                
-                                lane_idx = obj.lane.state_idxs(j);                                   
+                                                              
                                 [r_jac,p_jac,param_jac,anchored_res] = obj.getASJac(R,P,initParams,Params,subSegIdxL,lane_idx,k,'left');
                                 % Output jacobians are already normalized
                                 
@@ -1376,10 +1327,9 @@ classdef optimizer < handle
                             % Right
                             if subSegIdxR > 0 % Valid Measurement
                                 initParams = [rightSeg.x0, rightSeg.y0, rightSeg.tau0];
-                                Params = [rightSeg.kappa; rightSeg.L];
+                                Params = [rightSeg.kappa; rightSeg.L];                                
                                 
-                                lane_idx = obj.lane.state_idxs(j);
-                                [r_jac,p_jac,param_jac,anchored_res] = obj.getASJac(R,P,initParams,Params,subSegIdxL,lane_idx,k,'right');
+                                [r_jac,p_jac,param_jac,anchored_res] = obj.getASJac(R,P,initParams,Params,subSegIdxR,lane_idx,k,'right');
                                 % Output jacobians are already normalized
                                 
                                 % Residual
@@ -1403,11 +1353,17 @@ classdef optimizer < handle
                         end
                     end                    
                 end
+
                 AS_jacL = sparse(I_L,J_L,V_L,blk_heightL,blk_width);
                 AS_jacR = sparse(I_R,J_R,V_R,blk_heightR,blk_width);
+                disp([blk_heightL, blk_heightR])
 
                 AS_res = vertcat(AS_resL,AS_resR);
                 AS_jac = vertcat(AS_jacL,AS_jacR);
+                obj.opt.AS_res = AS_res;
+                obj.opt.AS_jac = AS_jac;
+                error(1);
+                
             end
         end
 
@@ -1549,7 +1505,7 @@ classdef optimizer < handle
                 arc_delta_params = [arc_delta_params {delta_params}];
                 cnt = cnt + 3 + 2 * num_subseg;
             end
-            obj.map.update(obj.states,arc_delta_params)
+            obj.map.update(obj.states,arc_delta_params);
         end
 
         %% Arc Spline based Numerical Jacobian Computation
@@ -1559,7 +1515,7 @@ classdef optimizer < handle
             % param_jac is jacobian for the segment of interest, not the
             % total parameter jacobian
 
-            eps = 1e-8; % Numerical Jacobian step size
+            eps = 1e-6; % Numerical Jacobian step size
             anchored_res = obj.getASRes(R,P,initParams,Params,subSegIdx,lane_idx,k,dir);
 
             r_jac = zeros(1,3); p_jac = zeros(1,3); 
@@ -1668,9 +1624,9 @@ classdef optimizer < handle
             % WARNING! Need to double check if this logic is appropriate
             % Computing "distance" residual
             if kappa > 0
-                res = yc_b - sqrt((1/kappa)^2 - (10*(k-1) - xc_b)^2) - dij;
+                res = yc_b - sqrt((1/kappa)^2 - xc_b^2) - dij;
             else
-                res = yc_b + sqrt((1/kappa)^2 - (10*(k-1) - xc_b)^2) - dij;
+                res = yc_b + sqrt((1/kappa)^2 - xc_b^2) - dij;
             end
         end
 
