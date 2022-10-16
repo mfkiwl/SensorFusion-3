@@ -1250,6 +1250,9 @@ classdef optimizer < handle
             % 1) Denormalized error is correctly matched? --> Check Logic
             % 2) Jacobian shape error? 
             % 3) Simple Implementation error? --> retraction, etc
+            % Reason found: jacobian for each segment's last sub-segment's
+            % L is not included in the jacobian formulation --> need to 
+            % create additional measurement model for this case
            
             if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
                 AS_res = []; AS_jac = [];
