@@ -716,6 +716,7 @@ classdef optimizer < handle
                 x0 = obj.ComputeDogLeg(h_gn,h_gd,tr_rad);
                 
                 dummy_states = obj.states; % need to check if change in dummy state changes obj.states
+                dummy_map = obj.map;
                 dummy_bias = obj.bias;
                 dummy_imu = obj.imu;
 
@@ -737,6 +738,7 @@ classdef optimizer < handle
                     % Current Step Rejected, recover states, bias, 
                     % imu(preintegrated terms) using dummy variables
                     obj.states = dummy_states;
+                    obj.map = dummy_map;
                     obj.bias = dummy_bias;
                     obj.imu = dummy_imu;
                     string = 'Rejected';
@@ -1365,42 +1367,99 @@ classdef optimizer < handle
 
                 AS_jacL = sparse(I_L,J_L,V_L,blk_heightL,blk_width);
                 AS_jacR = sparse(I_R,J_R,V_R,blk_heightR,blk_width);
-                disp([blk_heightL, blk_heightR])
 
                 AS_res = vertcat(AS_resL,AS_resR);
                 AS_jac = vertcat(AS_jacL,AS_jacR);
-                obj.opt.AS_res = AS_res;
-                obj.opt.AS_jac = AS_jac;
-                error(1);
+                
+%                 error(1);
                 
             end
         end
 
         %% Arc Spline based Measurement 2 Residual and Jacobian
         function [AS2_res,AS2_jac] = CreateAS2Block(obj)
-            % Additional Measurement model to anchor final point in each
-            % large segment
+            % Additional Measurement model to anchor initial and final 
+            % point in each large segment
             if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
                 AS2_res = []; AS2_jac = [];
             else
-                
+                n = length(obj.map.arc_segments);
+                m = length(obj.states);
+                blk_height = 2 * n;
+                blk_width = length(obj.opt.x0);
+                AS2_resF = zeros(blk_height,1);
+                AS2_resI = zeros(blk_height,1);
+                I_F = []; I_I = [];
+                J_F = []; J_I = [];
+                V_F = []; V_I = [];
 
-                for i=1:length(obj.map.arc_segments)
+                subsegcolIdxs = [1 1 + cumsum(3 + 2*obj.map.subseg_cnt(1:end-1))];
+
+                for i=1:n
                     [intvIdx,dir] = obj.maxColIdx(obj.map.segment_info,i);
 
-                    state = obj.states{obj.lane.FactorValidIntvs(intvIdx,2)};
+                    % Final
+                    state_idx = obj.lane.FactorValidIntvs(intvIdx,2);
+                    state = obj.states{state_idx};
                     R = state.R; P = state.P;
-                    lane_idx = obj.lane.state_idxs(obj.lane.FactorValidIntvs(intvIdx,2));
+                    lane_idx = obj.lane.state_idxs(state_idx);
                     
                     seg = obj.map.arc_segments{i};
                     initParams = [seg.x0, seg.y0, seg.tau0];
                     Params = [seg.kappa; seg.L];
                     if strcmp(dir,'left')
-                        [r_jac,p_jac,param_jac,anchored_res] = obj.getAS2Jac(R,P,initParams,Params,lane_idx,'left');
+                        [r_jac,p_jac,param_jac,anchored_res] = obj.getAS2Jac(R,P,initParams,Params,lane_idx,'left','last');
                     elseif strcmp(dir,'right')
-                        [r_jac,p_jac,param_jac,anchored_res] = obj.getAS2Jac(R,P,initParams,Params,lane_idx,'right');
+                        [r_jac,p_jac,param_jac,anchored_res] = obj.getAS2Jac(R,P,initParams,Params,lane_idx,'right','last');
                     end
+
+                    % Residual
+                    AS2_resF(2*i-1:2*i) = anchored_res;
+                    
+                    [I_rF,J_rF,V_rF] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+1:9*(state_idx-1)+3,r_jac);
+                    [I_pF,J_pF,V_pF] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+7:9*(state_idx-1)+9,p_jac);
+                
+                    segIdx = subsegcolIdxs(i);
+                    num = 3+2*obj.map.subseg_cnt(i)-1;
+
+                    [I_PF,J_PF,V_PF] = sparseFormat(2*i-1:2*i,16*m+segIdx:16*m+segIdx+num,param_jac);
+                    
+                    % Init
+                    state_idx = obj.lane.FactorValidIntvs(intvIdx,1);
+                    state = obj.states{state_idx};
+                    R = state.R; P = state.P;
+                    lane_idx = obj.lane.state_idxs(state_idx);
+
+                    if strcmp(dir,'left')
+                        [r_jac,p_jac,param_jac,anchored_res] = obj.getAS2Jac(R,P,initParams,Params,lane_idx,'left','init');
+                    elseif strcmp(dir,'right')
+                        [r_jac,p_jac,param_jac,anchored_res] = obj.getAS2Jac(R,P,initParams,Params,lane_idx,'right','init');
+                    end
+                    
+                    % Residual
+                    AS2_resI(2*i-1:2*i) = anchored_res;
+                    
+                    [I_rI,J_rI,V_rI] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+1:9*(state_idx-1)+3,r_jac);
+                    [I_pI,J_pI,V_pI] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+7:9*(state_idx-1)+9,p_jac);
+                
+                    segIdx = subsegcolIdxs(i);
+                    num = 3+2*obj.map.subseg_cnt(i)-1;
+
+                    [I_PI,J_PI,V_PI] = sparseFormat(2*i-1:2*i,16*m+segIdx:16*m+segIdx+num,param_jac);
+
+                    I_F = [I_F I_rF I_pF I_PF];
+                    I_I = [I_I I_rI I_pI I_PI];
+                    J_F = [J_F J_rF J_pF J_PF];
+                    J_I = [J_I J_rI J_pI J_PI];
+                    V_F = [V_F V_rF V_pF V_PF];
+                    V_I = [V_I V_rI V_pI V_PI];
                 end
+                AS2_res = vertcat(AS2_resI,AS2_resF);
+                AS2_jacF = sparse(I_F,J_F,V_F,blk_height,blk_width);
+                AS2_jacI = sparse(I_I,J_I,V_I,blk_height,blk_width);
+                AS2_jac = vertcat(AS2_jacI,AS2_jacF);
+                obj.opt.AS2_res = AS2_res;
+                error(1);
             end
         end
 
@@ -1668,9 +1727,9 @@ classdef optimizer < handle
         end
 
         %% Arc Spline based Numerical Jacobian Computation 2
-        function [r_jac,p_jac,param_jac,anchored_res] = getAS2Jac(obj,R,P,initParams,Params,lane_idx,dir)
+        function [r_jac,p_jac,param_jac,anchored_res] = getAS2Jac(obj,R,P,initParams,Params,lane_idx,dir,flag)
             eps = 1e-8;
-            anchored_res = obj.getAS2Res(R,P,initParams,Params,lane_idx,dir);
+            anchored_res = obj.getAS2Res(R,P,initParams,Params,lane_idx,dir,flag);
             
             r_jac = zeros(2,3); p_jac = zeros(2,3); 
             param_jac = zeros(2,3+numel(Params));
@@ -1690,7 +1749,7 @@ classdef optimizer < handle
                 rot_ptb_vec(i) = eps;
                 R_ptb = R * Exp_map(rot_ptb_vec); 
 
-                res_ptb = obj.getAS2Res(R_ptb,P,initParams,Params,lane_idx,dir);
+                res_ptb = obj.getAS2Res(R_ptb,P,initParams,Params,lane_idx,dir,flag);
                 r_jac(:,i) = (res_ptb - anchored_res)/eps;
             end
             r_jac = InvMahalanobis(r_jac,cov);
@@ -1702,7 +1761,7 @@ classdef optimizer < handle
                 pos_ptb_vec(i) = eps;
                 P_ptb = P + R * pos_ptb_vec;
 
-                res_ptb = obj.getAS2Res(R,P_ptb,initParams,Params,lane_idx,dir);
+                res_ptb = obj.getAS2Res(R,P_ptb,initParams,Params,lane_idx,dir,flag);
                 p_jac(:,i) = (res_ptb - anchored_res)/eps;
             end
             p_jac = InvMahalanobis(p_jac,cov);
@@ -1713,8 +1772,8 @@ classdef optimizer < handle
                 initParams_ptb_vec(i) = eps;
                 initParams_ptb = initParams + initParams_ptb_vec;
 
-                res_ptb = obj.getAS2Res(R,P,initParams_ptb,Params,lane_idx,dir);
-                param_jac(i) = (res_ptb - anchored_res)/eps;
+                res_ptb = obj.getAS2Res(R,P,initParams_ptb,Params,lane_idx,dir,flag);
+                param_jac(:,i) = (res_ptb - anchored_res)/eps;
             end
 
             % 4: Perturbation to Sub-Segment Params
@@ -1727,7 +1786,7 @@ classdef optimizer < handle
                     Params_ptb_vec(i,j) = eps;
                     Params_ptb = Params + Params_ptb_vec;
 
-                    res_ptb = obj.getAS2Res(R,P,initParams,Params_ptb,lane_idx,dir);
+                    res_ptb = obj.getAS2Res(R,P,initParams,Params_ptb,lane_idx,dir,flag);
                     param_jac(:,3+2*(j-1)+i) = (res_ptb - anchored_res)/eps;
                 end
             end
@@ -1737,9 +1796,9 @@ classdef optimizer < handle
         end
 
         %% Arc Spline based measurement 2 residual
-        function res = getAS2Res(obj,R,P,initParams,Params,lane_idx,dir)
+        function res = getAS2Res(obj,R,P,initParams,Params,lane_idx,dir,flag)
             % Computing residual for given segment's last point
-            rpy = dcm2rpy(Ri); psi = rpy(3);
+            rpy = dcm2rpy(R); psi = rpy(3);
             R2d = [cos(psi) -sin(psi);
                    sin(psi) cos(psi)];
 
@@ -1747,10 +1806,12 @@ classdef optimizer < handle
             x = initParams(1); y = initParams(2); heading = initParams(3);
             kappas = Params(1,:); Ls = Params(2,:);            
             
-            for i=1:length(kappas)
-                x = x + 1/kappas(i) * (sin(heading + kappas(i) * Ls(i)) - sin(heading));
-                y = y - 1/kappas(i) * (cos(heading + kappas(i) * Ls(i)) - cos(heading));
-                heading = heading + kappas(i) * Ls(i);
+            if strcmp(flag,'last')
+                for i=1:length(kappas)
+                    x = x + 1/kappas(i) * (sin(heading + kappas(i) * Ls(i)) - sin(heading));
+                    y = y - 1/kappas(i) * (cos(heading + kappas(i) * Ls(i)) - cos(heading));
+                    heading = heading + kappas(i) * Ls(i);
+                end
             end
             X = [x;y];
             Xb = R2d' * (X - P(1:2)); xb = Xb(1); yb = Xb(2);
@@ -1761,7 +1822,8 @@ classdef optimizer < handle
                 dij = obj.lane.ry(lane_idx,1);
             end
             % xb should be 0 (ideal)
-            res = [xb;yb - dij];            
+            res = [xb;yb - dij];      
+            
         end
 
     end
@@ -1887,14 +1949,15 @@ classdef optimizer < handle
             if isempty(c)
                 error('No matched number')
             else
-                idx = max(c);
-                if r == 1
+                [idx,max_idx] = max(c);
+                if r(max_idx) == 1
                     dir = 'left';
-                elseif r == 2
+                elseif r(max_idx) == 2
                     dir = 'right';
                 end
             end
         end
+        
     end
 end
 

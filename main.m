@@ -91,10 +91,11 @@ lane_.prob_thres = 0.6; % Set lane prob threshold for discarding low-reliability
 sol = struct();
 sol.full = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
 sol.full.optimize();
-%%
 sol.full.update('2-phase') % Update mode to 2-phase
 sol.full.optimize();
-% sol.full.visualize();
+%% 
+
+sol.full.visualize();
 
 %% 
 sol.full.map.visualize2DMap();
