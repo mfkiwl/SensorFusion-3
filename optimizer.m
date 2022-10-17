@@ -1395,10 +1395,9 @@ classdef optimizer < handle
 
                 subsegcolIdxs = [1 1 + cumsum(3 + 2*obj.map.subseg_cnt(1:end-1))];
 
-                for i=1:n
-                    [intvIdx,dir] = obj.maxColIdx(obj.map.segment_info,i);
-
+                for i=1:n                    
                     % Final
+                    [intvIdx,dir] = obj.maxColIdx(obj.map.segment_info,i);
                     state_idx = obj.lane.FactorValidIntvs(intvIdx,2);
                     state = obj.states{state_idx};
                     R = state.R; P = state.P;
@@ -1425,6 +1424,7 @@ classdef optimizer < handle
                     [I_PF,J_PF,V_PF] = sparseFormat(2*i-1:2*i,16*m+segIdx:16*m+segIdx+num,param_jac);
                     
                     % Init
+                    [intvIdx,dir] = obj.minColIdx(obj.map.segment_info,i);
                     state_idx = obj.lane.FactorValidIntvs(intvIdx,1);
                     state = obj.states{state_idx};
                     R = state.R; P = state.P;
@@ -1953,6 +1953,21 @@ classdef optimizer < handle
                 if r(max_idx) == 1
                     dir = 'left';
                 elseif r(max_idx) == 2
+                    dir = 'right';
+                end
+            end
+        end
+
+        %% Find Minimum column index
+        function [idx, dir] = minColIdx(arr,num)
+            [r,c] = find(arr==num);
+            if isempty(c)
+                error('No matched number')
+            else
+                [idx,min_idx] = min(c);
+                if r(min_idx) == 1
+                    dir = 'left';
+                elseif r(min_idx) == 2
                     dir = 'right';
                 end
             end

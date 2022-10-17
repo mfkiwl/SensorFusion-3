@@ -52,7 +52,7 @@ options = struct();
 options.CostThres = 1e-6;
 options.StepThres = 1e-6;
 options.IterThres = 100;
-options.Algorithm = 'GN';
+options.Algorithm = 'TR';
 % GN : Gauss-Newton (Recommended for fast convergence, may not be stable for severely non-linear cases)
 % LM : Levenberg-Marquardt(Not recommended for batch-wise optimization: wrong convergence)
 % TR : Trust-Region (Recommended for stable convergence, but typically much slower than G-N method)
