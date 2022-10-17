@@ -796,9 +796,10 @@ classdef optimizer < handle
             [WSS_res,WSS_jac] = obj.CreateWSSBlock();
 %             [ME_res,ME_jac] = obj.CreateMEBlock(); % Deprecated
             [AS_res,AS_jac] = obj.CreateASBlock();
-%             error('1');
-            res = vertcat(Pr_res,MM_res,GNSS_res,WSS_res,AS_res);
-            jac = vertcat(Pr_jac,MM_jac,GNSS_jac,WSS_jac,AS_jac);            
+            [AS2_res,AS2_jac] = obj.CreateAS2Block();
+
+            res = vertcat(Pr_res,MM_res,GNSS_res,WSS_res,AS_res,AS2_res);
+            jac = vertcat(Pr_jac,MM_jac,GNSS_jac,WSS_jac,AS_jac,AS2_jac);            
         end
         
         %% Prior Residual and Jacobian
@@ -1245,14 +1246,19 @@ classdef optimizer < handle
             %
             % =====================Debugging=====================
             %
-            % #1 Singularity occurs in jacobian
+            % #1 <Singularity occurs in jacobian>
             % Things to check: 
             % 1) Denormalized error is correctly matched? --> Check Logic
             % 2) Jacobian shape error? 
             % 3) Simple Implementation error? --> retraction, etc
+            % 
             % Reason found: jacobian for each segment's last sub-segment's
             % L is not included in the jacobian formulation --> need to 
             % create additional measurement model for this case
+            % 
+            % Solution: Implement segment's last point measurement
+            % Additional measurement model block is implemented below as
+            % obj.CreateAS2Block() function
            
             if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
                 AS_res = []; AS_jac = [];
@@ -1367,6 +1373,34 @@ classdef optimizer < handle
                 obj.opt.AS_jac = AS_jac;
                 error(1);
                 
+            end
+        end
+
+        %% Arc Spline based Measurement 2 Residual and Jacobian
+        function [AS2_res,AS2_jac] = CreateAS2Block(obj)
+            % Additional Measurement model to anchor final point in each
+            % large segment
+            if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
+                AS2_res = []; AS2_jac = [];
+            else
+                
+
+                for i=1:length(obj.map.arc_segments)
+                    [intvIdx,dir] = obj.maxColIdx(obj.map.segment_info,i);
+
+                    state = obj.states{obj.lane.FactorValidIntvs(intvIdx,2)};
+                    R = state.R; P = state.P;
+                    lane_idx = obj.lane.state_idxs(obj.lane.FactorValidIntvs(intvIdx,2));
+                    
+                    seg = obj.map.arc_segments{i};
+                    initParams = [seg.x0, seg.y0, seg.tau0];
+                    Params = [seg.kappa; seg.L];
+                    if strcmp(dir,'left')
+                        [r_jac,p_jac,param_jac,anchored_res] = obj.getAS2Jac(R,P,initParams,Params,lane_idx,'left');
+                    elseif strcmp(dir,'right')
+                        [r_jac,p_jac,param_jac,anchored_res] = obj.getAS2Jac(R,P,initParams,Params,lane_idx,'right');
+                    end
+                end
             end
         end
 
@@ -1518,7 +1552,7 @@ classdef optimizer < handle
             % param_jac is jacobian for the segment of interest, not the
             % total parameter jacobian
 
-            eps = 1e-6; % Numerical Jacobian step size
+            eps = 1e-8; % Numerical Jacobian step size
             anchored_res = obj.getASRes(R,P,initParams,Params,subSegIdx,lane_idx,k,dir);
 
             r_jac = zeros(1,3); p_jac = zeros(1,3); 
@@ -1631,6 +1665,103 @@ classdef optimizer < handle
             else
                 res = yc_b + sqrt((1/kappa)^2 - xc_b^2) - dij;
             end
+        end
+
+        %% Arc Spline based Numerical Jacobian Computation 2
+        function [r_jac,p_jac,param_jac,anchored_res] = getAS2Jac(obj,R,P,initParams,Params,lane_idx,dir)
+            eps = 1e-8;
+            anchored_res = obj.getAS2Res(R,P,initParams,Params,lane_idx,dir);
+            
+            r_jac = zeros(2,3); p_jac = zeros(2,3); 
+            param_jac = zeros(2,3+numel(Params));
+            if strcmp(dir,'left')
+                cov = diag([0.01^2, obj.lane.lystd(lane_idx,1)^2]);
+            elseif strcmp(dir,'right')
+                cov = diag([0.01^2, obj.lane.rystd(lane_idx,1)^2]);
+            end
+            
+            % Add perturbation to all variables of
+            % interest to find jacobian
+
+            % 1: Perturbation to Rotational Matrix
+
+            for i=1:3
+                rot_ptb_vec = zeros(3,1);
+                rot_ptb_vec(i) = eps;
+                R_ptb = R * Exp_map(rot_ptb_vec); 
+
+                res_ptb = obj.getAS2Res(R_ptb,P,initParams,Params,lane_idx,dir);
+                r_jac(:,i) = (res_ptb - anchored_res)/eps;
+            end
+            r_jac = InvMahalanobis(r_jac,cov);
+
+            % 2: Perturbation to Position
+            
+            for i=1:3
+                pos_ptb_vec = zeros(3,1);
+                pos_ptb_vec(i) = eps;
+                P_ptb = P + R * pos_ptb_vec;
+
+                res_ptb = obj.getAS2Res(R,P_ptb,initParams,Params,lane_idx,dir);
+                p_jac(:,i) = (res_ptb - anchored_res)/eps;
+            end
+            p_jac = InvMahalanobis(p_jac,cov);
+
+            % 3: Perturbation to Segment initParams
+            for i=1:3
+                initParams_ptb_vec = zeros(1,3);
+                initParams_ptb_vec(i) = eps;
+                initParams_ptb = initParams + initParams_ptb_vec;
+
+                res_ptb = obj.getAS2Res(R,P,initParams_ptb,Params,lane_idx,dir);
+                param_jac(i) = (res_ptb - anchored_res)/eps;
+            end
+
+            % 4: Perturbation to Sub-Segment Params
+            for j=1:size(Params,2)
+                % For sub-segment parameter perturbation, variables "after"
+                % the target sub-segment index are not used!
+                
+                for i=1:2
+                    Params_ptb_vec = zeros(size(Params));
+                    Params_ptb_vec(i,j) = eps;
+                    Params_ptb = Params + Params_ptb_vec;
+
+                    res_ptb = obj.getAS2Res(R,P,initParams,Params_ptb,lane_idx,dir);
+                    param_jac(:,3+2*(j-1)+i) = (res_ptb - anchored_res)/eps;
+                end
+            end
+            param_jac = InvMahalanobis(param_jac,cov);
+            
+            anchored_res = InvMahalanobis(anchored_res,cov);
+        end
+
+        %% Arc Spline based measurement 2 residual
+        function res = getAS2Res(obj,R,P,initParams,Params,lane_idx,dir)
+            % Computing residual for given segment's last point
+            rpy = dcm2rpy(Ri); psi = rpy(3);
+            R2d = [cos(psi) -sin(psi);
+                   sin(psi) cos(psi)];
+
+            % Propgate arc node point until the last sub-segment
+            x = initParams(1); y = initParams(2); heading = initParams(3);
+            kappas = Params(1,:); Ls = Params(2,:);            
+            
+            for i=1:length(kappas)
+                x = x + 1/kappas(i) * (sin(heading + kappas(i) * Ls(i)) - sin(heading));
+                y = y - 1/kappas(i) * (cos(heading + kappas(i) * Ls(i)) - cos(heading));
+                heading = heading + kappas(i) * Ls(i);
+            end
+            X = [x;y];
+            Xb = R2d' * (X - P(1:2)); xb = Xb(1); yb = Xb(2);
+
+            if strcmp(dir,'left')
+                dij = obj.lane.ly(lane_idx,1);
+            elseif strcmp(dir,'right')
+                dij = obj.lane.ry(lane_idx,1);
+            end
+            % xb should be 0 (ideal)
+            res = [xb;yb - dij];            
         end
 
     end
@@ -1749,7 +1880,21 @@ classdef optimizer < handle
                 osc_flag = false;
             end
         end
-
+        
+        %% Find Maximum column index
+        function [idx, dir] = maxColIdx(arr,num)
+            [r,c] = find(arr==num);
+            if isempty(c)
+                error('No matched number')
+            else
+                idx = max(c);
+                if r == 1
+                    dir = 'left';
+                elseif r == 2
+                    dir = 'right';
+                end
+            end
+        end
     end
 end
 
