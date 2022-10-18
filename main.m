@@ -52,7 +52,7 @@ options = struct();
 options.CostThres = 1e-6;
 options.StepThres = 1e-6;
 options.IterThres = 100;
-options.Algorithm = 'TR';
+options.Algorithm = 'GN';
 % GN : Gauss-Newton (Recommended for fast convergence, may not be stable for severely non-linear cases)
 % LM : Levenberg-Marquardt(Not recommended for batch-wise optimization: wrong convergence)
 % TR : Trust-Region (Recommended for stable convergence, but typically much slower than G-N method)
@@ -88,10 +88,16 @@ lane_.prob_thres = 0.6; % Set lane prob threshold for discarding low-reliability
 
 %% INS + GNSS + WSS + Lane Fusion
 
+% To find warning id of most recent warning, use 'warning('query','last')'
+id = 'MATLAB:nearlySingularMatrix';
+warning('off',id);
+
 sol = struct();
 sol.full = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
 sol.full.optimize();
-sol.full.update('2-phase') % Update mode to 2-phase
+sol.full.opt.options.Algorithm = 'TR';
+sol.full.update('2-phase'); % Update mode to 2-phase
+%%
 sol.full.optimize();
 %% 
 

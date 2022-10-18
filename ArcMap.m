@@ -14,6 +14,7 @@ classdef ArcMap < handle
         assocL
         assocR
         subseg_cnt = []
+        validity
         dummy = struct() % Dummy variable for debugging
     end
     
@@ -32,7 +33,7 @@ classdef ArcMap < handle
             obj.InitSegmentParametrization();
 
             % Data Association
-            obj.associate();
+            obj.associate();% --> initial data association is done using init segmentation information
         end
         
         %% Map Update
@@ -55,20 +56,12 @@ classdef ArcMap < handle
                 obj.arc_segments{i}.x0 = obj.arc_segments{i}.x0 + arc_delta_params{i}.x0;
                 obj.arc_segments{i}.y0 = obj.arc_segments{i}.y0 + arc_delta_params{i}.y0;
                 obj.arc_segments{i}.tau0 = obj.arc_segments{i}.tau0 + arc_delta_params{i}.tau0;
-                
-                [obj.arc_segments{i}.xc, obj.arc_segments{i}.yc] = obj.getCenter(obj.arc_segments{i}.x0,...
-                                                                                 obj.arc_segments{i}.y0,...
-                                                                                 obj.arc_segments{i}.tau0,...
-                                                                                 obj.arc_segments{i}.kappa,...
-                                                                                 obj.arc_segments{i}.L);
                 obj.subseg_cnt(i) = length(arc_delta_params{i}.kappa);
             end
 
             % Perform data association with updated variables
-            obj.associate();
+%             obj.associate();
         end
-
-        
 
         %% Map Visualization (2D Segmentwise Point Map)
         function obj = visualize2DMap(obj)
@@ -106,6 +99,62 @@ classdef ArcMap < handle
            
         end
         
+        %% Validate Current Map after convergence
+        function obj = validate(obj,phase)
+            % For each segment, find the most invalid subsegment
+            n = size(obj.lane.FactorValidIntvs,1);
+            
+            % Validity: stores number of invalid measurements for each
+            % sub-segment for every segment
+            obj.validity = {};
+            for i=1:length(obj.arc_segments)
+                obj.validity = [obj.validity {zeros(1,length(obj.arc_segments{i}.kappa))}];
+            end
+
+            for i=1:n
+                lb = obj.lane.FactorValidIntvs(i,1);
+                ub = obj.lane.FactorValidIntvs(i,2);
+                
+                leftSegIdx = obj.segment_info(1,i);
+                rightSegIdx = obj.segment_info(2,i);
+
+                for j=lb:ub
+                    if phase == 2
+                        prev_max = 1;
+                    elseif phase == 3
+                        prev_max = obj.lane.prev_num;
+                    end
+                    
+                    for k=1:prev_max
+                        leftsubSegIdx = obj.assocL(j,k);
+                        rightsubSegIdx = obj.assocR(j,k);
+
+                        if leftsubSegIdx > 0
+                            valid = obj.isValid(leftSegIdx,leftsubSegIdx,j,k,'left');
+                            if ~valid
+                                obj.validity{leftSegIdx}(leftsubSegIdx) = obj.validity{leftSegIdx}(leftsubSegIdx) + 1;
+                            end
+                        end
+
+                        if rightsubSegIdx > 0
+                            valid = obj.isValid(rightSegIdx,rightsubSegIdx,j,k,'right');
+                            if ~valid
+                                obj.validity{rightSegIdx}(rightsubSegIdx) = obj.validity{rightSegIdx}(rightsubSegIdx) + 1;
+                            end
+                        end
+                    end
+                end
+            end
+
+            % Add new segments for the most "invalid" sub-segment
+            for i=1:length(obj.validity)
+                [~,badsubSegIdx] = max(obj.validity{i});
+                obj.replicate(i,badsubSegIdx);
+            end
+
+            obj.associate();
+        end
+       
     end
     
     %% Private Methods
@@ -170,6 +219,7 @@ classdef ArcMap < handle
                 initParams = struct();
                 initParams.kappa = [];
                 initParams.L = [];
+                initParams.bnds = [];
                 
                 initStateIdx = obj.lane.FactorValidIntvs(obj.findColIdx(obj.segment_info,i),1);
                 initParams.x0 = obj.segments{i}(1,1);
@@ -179,7 +229,7 @@ classdef ArcMap < handle
                 heading = initParams.tau0;
 
                 for j=1:length(initSegments)
-                    
+                    initParams.bnds = [initParams.bnds; initSegments{j}.bnds];
                     initParams.kappa = [initParams.kappa initSegments{j}.kappa];
                     initParams.L = [initParams.L initSegments{j}.L];
                     if j == 1
@@ -405,6 +455,77 @@ classdef ArcMap < handle
                     end
                 end
             end
+        end
+        
+        %% Check validity for each specific cases
+        function flag = isValid(obj,segIdx,subsegIdx,state_idx,prev_idx,dir)
+            seg = obj.arc_segments{segIdx};
+            kappa = seg.kappa(1:subsegIdx); L = seg.L(1:subsegIdx);
+            x0 = seg.x0; y0 = seg.y0; tau0 = seg.tau0;
+
+            [xc,yc] = obj.getCenter(x0,y0,tau0,kappa,L);
+            R = obj.states{state_idx}.R; 
+            P = obj.states{state_idx}.P;
+            
+            P_prop = P + R * [10*(prev_idx-1);0;0];
+            rpy = dcm2rpy(R); psi = rpy(3);
+            R2d = [cos(psi) -sin(psi); sin(psi) cos(psi)];
+            
+            Xc_b = R2d' * ([xc;yc] - P_prop(1:2));
+            xc_b = Xc_b(1); yc_b = Xc_b(2);
+
+
+            lane_idx = obj.lane.state_idxs(state_idx);
+            if strcmp(dir,'left')
+                dij = obj.lane.ly(lane_idx,prev_idx);
+                cov = obj.lane.lystd(lane_idx,prev_idx)^2;
+            elseif strcmp(dir,'right')
+                dij = obj.lane.ry(lane_idx,prev_idx);
+                cov = obj.lane.rystd(lane_idx,prev_idx)^2;
+            end
+
+            if kappa(subsegIdx) > 0
+                Z_pred = yc_b - sqrt((1/kappa(subsegIdx))^2 - xc_b^2);
+            else
+                Z_pred = yc_b + sqrt((1/kappa(subsegIdx))^2 - xc_b^2);
+            end
+
+            thres = chi2inv(0.99,2);
+
+            chisq = (Z_pred-dij)' / cov * (Z_pred-dij); 
+            if chisq > thres
+                flag = false;
+            else
+                flag = true;
+            end            
+        end
+        
+        %% Replicate invalid segment for new optimization
+        function obj = replicate(obj,segIdx,subsegIdx)
+            seg = obj.arc_segments{segIdx};
+            kappa = seg.kappa(subsegIdx); L = seg.L(subsegIdx);
+
+            % Create replica by halving the original arc length
+            if subsegIdx == 1
+                seg.kappa = [kappa seg.kappa];
+                seg.L(subsegIdx) = 1/2 * seg.L(subsegIdx);
+                seg.L = [L/2 seg.L];
+            elseif subsegIdx == length(seg.kappa)
+                seg.kappa = [seg.kappa kappa];
+                seg.L(subsegIdx) = 1/2 * seg.L(subsegIdx);
+                seg.L = [seg.L L/2];
+            else
+                kappaF = seg.kappa(1:subsegIdx-1);
+                kappaB = seg.kappa(subsegIdx+1:end);
+                LF = seg.L(1:subsegIdx-1);
+                LB = seg.L(subsegIdx+1:end);
+                seg.kappa = [kappaF kappa kappa kappaB];
+                seg.L = [LF 1/2*L 1/2 * L LB];
+            end
+
+            % Update segment info
+            obj.arc_segments{segIdx} = seg;
+            obj.subseg_cnt(segIdx) = obj.subseg_cnt(segIdx) + 1;
         end
         
     end
