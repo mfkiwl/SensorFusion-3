@@ -51,7 +51,7 @@ covs_.wss = 1e-6 * eye(3);
 options = struct();
 options.CostThres = 1e-6;
 options.StepThres = 1e-6;
-options.IterThres = 100;
+options.IterThres = 30;
 options.Algorithm = 'GN';
 % GN : Gauss-Newton (Recommended for fast convergence, may not be stable for severely non-linear cases)
 % LM : Levenberg-Marquardt(Not recommended for batch-wise optimization: wrong convergence)
@@ -89,19 +89,18 @@ lane_.prob_thres = 0.6; % Set lane prob threshold for discarding low-reliability
 %% INS + GNSS + WSS + Lane Fusion
 
 % To find warning id of most recent warning, use 'warning('query','last')'
-id = 'MATLAB:nearlySingularMatrix';
-warning('off',id);
+% warning('off','MATLAB:nearlySingularMatrix');
 
 sol = struct();
+% Optimize with INS + GNSS + WSS Fusion first 
 sol.full = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
 sol.full.optimize();
+% Switch optimization mode to 2-phase and optimize with lane data
 sol.full.opt.options.Algorithm = 'TR';
 sol.full.update('2-phase'); % Update mode to 2-phase
+% sol.full.optimize();
+
 %%
-sol.full.optimize();
-%% 
 
-sol.full.visualize();
-
-%% 
+% sol.full.visualize();
 sol.full.map.visualize2DMap();

@@ -33,7 +33,7 @@ classdef ArcMap < handle
             obj.InitSegmentParametrization();
 
             % Data Association
-            obj.associate();% --> initial data association is done using init segmentation information
+            obj.InitDataAssociation();% --> initial data association is done using init segmentation information
         end
         
         %% Map Update
@@ -60,7 +60,8 @@ classdef ArcMap < handle
             end
 
             % Perform data association with updated variables
-%             obj.associate();
+%             obj.associate(); % update data association after one batch
+%             optimization process for stable convergence
         end
 
         %% Map Visualization (2D Segmentwise Point Map)
@@ -74,7 +75,7 @@ classdef ArcMap < handle
             
             for i=1:n
                 P = obj.states{i}.P;
-                plot(P(1),P(2),'r.');
+                p_est = plot(P(1),P(2),'r.');
             end
 
             n = length(obj.arc_segments);
@@ -82,7 +83,7 @@ classdef ArcMap < handle
                 m = length(obj.arc_segments{i}.kappa);
                 seg = obj.arc_segments{i};
                 heading = seg.tau0;
-                segPoints = [seg.x0;
+                SegPoints = [seg.x0;
                              seg.y0];
                 for j=1:m
                     kappa = seg.kappa(j); L = seg.L(j);
@@ -91,12 +92,25 @@ classdef ArcMap < handle
                     headingCurr = heading;
 
                     heading_ = linspace(headingPrev,headingCurr,1e3);
-                    segPoints = [segPoints segPoints(:,end) + 1/kappa * [sin(heading_) - sin(headingPrev);
-                                                                        -cos(heading_) + cos(headingPrev)]];
+                    addedSegPoints = SegPoints(:,end) + 1/kappa * [sin(heading_) - sin(headingPrev);
+                                                                   -cos(heading_) + cos(headingPrev)];
+                    SegPoints = [SegPoints addedSegPoints];
+                    
+                    p_node = plot(addedSegPoints(1,1),addedSegPoints(2,1),'co');
+                    plot(addedSegPoints(1,end),addedSegPoints(2,end),'co');
                 end
-                plot(segPoints(1,:),segPoints(2,:),'k-');
+                p_lane = plot(SegPoints(1,:),SegPoints(2,:),'k-');
+                p_seg = plot(SegPoints(1,1),SegPoints(2,1),'ms');
+                plot(SegPoints(1,end),SegPoints(2,end),'ms');
+
             end
            
+            xlabel('Global X(m)'); ylabel('Global Y(m)');
+            title('Optimized Vehicle Trajectory and Lane Segments');
+            legend([p_est,p_lane,p_node,p_seg], ...
+                   'Optimized Vehicle Trajectory', ...
+                   'Optimized Arc Spline based ego-lane', ...
+                   'Lane Sub-segment','Lane Segment');
         end
         
         %% Validate Current Map after convergence
@@ -110,6 +124,12 @@ classdef ArcMap < handle
             for i=1:length(obj.arc_segments)
                 obj.validity = [obj.validity {zeros(1,length(obj.arc_segments{i}.kappa))}];
             end
+            
+            if phase == 2
+                prev_max = 1;
+            elseif phase == 3
+                prev_max = obj.lane.prev_num;
+            end
 
             for i=1:n
                 lb = obj.lane.FactorValidIntvs(i,1);
@@ -119,12 +139,6 @@ classdef ArcMap < handle
                 rightSegIdx = obj.segment_info(2,i);
 
                 for j=lb:ub
-                    if phase == 2
-                        prev_max = 1;
-                    elseif phase == 3
-                        prev_max = obj.lane.prev_num;
-                    end
-                    
                     for k=1:prev_max
                         leftsubSegIdx = obj.assocL(j,k);
                         rightsubSegIdx = obj.assocR(j,k);
@@ -152,7 +166,7 @@ classdef ArcMap < handle
                 obj.replicate(i,badsubSegIdx);
             end
 
-            obj.associate();
+            obj.associate(phase);
         end
        
     end
@@ -227,7 +241,8 @@ classdef ArcMap < handle
                 rpy = dcm2rpy(obj.states{initStateIdx}.R);
                 initParams.tau0 = rpy(3); 
                 heading = initParams.tau0;
-
+                    
+                % Sub-segment information
                 for j=1:length(initSegments)
                     initParams.bnds = [initParams.bnds; initSegments{j}.bnds];
                     initParams.kappa = [initParams.kappa initSegments{j}.kappa];
@@ -246,6 +261,27 @@ classdef ArcMap < handle
             end
             
 
+        end
+        
+        %% Initial Data Association
+        function obj = InitDataAssociation(obj)
+            % Initial Data Association for phase 2 optimization
+            obj.assocL = zeros(length(obj.states),obj.lane.prev_num);
+            obj.assocR = obj.assocL;
+
+            for i=1:size(obj.lane.FactorValidIntvs,1)
+                lb = obj.lane.FactorValidIntvs(i,1);
+                ub = obj.lane.FactorValidIntvs(i,2);
+
+                leftSegIdx = obj.segment_info(1,i);
+                rightSegIdx = obj.segment_info(2,i);
+
+                for j=lb:ub
+                    % do not compare with rel idx
+                    obj.assocL(j,1) = obj.initDataAssocMatch(leftSegIdx,j);
+                    obj.assocR(j,1) = obj.initDataAssocMatch(rightSegIdx,j);
+                end
+            end
         end
 
         %% Initial segmentation
@@ -385,12 +421,13 @@ classdef ArcMap < handle
         end
         
         %% Data Association
-        function obj = associate(obj)
+        function obj = associate(obj,phase)
             % Data Association with current vehicle state and arc-spline
             % parameters. After each step in optimization, vehicle states
             % and arc parameters should be updated before re-association
             %
             % Create arc segment node points before data association
+            % Data Association for phase 3 optimization
             n = length(obj.arc_segments);
             for i=1:n
                 m = length(obj.arc_segments{i}.kappa);
@@ -414,7 +451,13 @@ classdef ArcMap < handle
             
             obj.assocL = zeros(length(obj.states),obj.lane.prev_num);
             obj.assocR = obj.assocL;
-
+            
+            if phase == 2
+                prev_max = 1;
+            elseif phase == 3
+                prev_max = obj.lane.prev_num;
+            end
+            
             for i=1:n
                 % State lb and ub for each large segment
                 lb = obj.lane.FactorValidIntvs(i,1);
@@ -430,13 +473,12 @@ classdef ArcMap < handle
 
                 % Perform matching for valid points
                 for j=lb:ub
-                    lane_idx = obj.lane.state_idxs(j);
-                    
+                    lane_idx = obj.lane.state_idxs(j);                    
                     R = obj.states{j}.R;
                     P = obj.states{j}.P;
                     % Filter Valid state idx
                     if obj.lane.prob(lane_idx,2) > obj.lane_prob_thres && obj.lane.prob(lane_idx,3) > obj.lane_prob_thres
-                        for k=1:obj.lane.prev_num
+                        for k=1:prev_max
                             rel_pos = [10*(k-1);0;0];
                             pos = P + R * rel_pos;
                             
@@ -528,6 +570,46 @@ classdef ArcMap < handle
             obj.subseg_cnt(segIdx) = obj.subseg_cnt(segIdx) + 1;
         end
         
+         %% Find initial data association match
+        function idx = initDataAssocMatch(obj,SegIdx,state_idx)
+            idx = 0;
+            [~,c] = find(obj.segment_info == SegIdx);
+            stateIntv = obj.lane.FactorValidIntvs(c(1):c(end),:);
+            diff = zeros(1,length(c));
+            for i=1:length(c)-1
+                diff(i+1) = stateIntv(i+1,1) - stateIntv(i,2) - 1;
+            end
+            summed_diff = cumsum(diff);
+            
+            rel_pos = 0;
+            for i=1:length(c)
+                if stateIntv(i,1) <= state_idx && stateIntv(i,2) >= state_idx
+                    rel_pos = state_idx - stateIntv(1,1) + 1 - summed_diff(i);
+                end
+            end
+            if rel_pos == 0
+%                 disp(state_idx)
+%                 disp(stateIntv)
+%                 disp(diff)
+                error('No appropriate match 1 ... Most likely to be implementation error')
+            end
+
+            Seg = obj.arc_segments{SegIdx};
+            for i=1:size(Seg.bnds,1)
+                if Seg.bnds(i,1) <= rel_pos && Seg.bnds(i,2) >= rel_pos
+                    idx = i;
+                end
+            end
+            if idx == 0
+%                 disp(state_idx)
+%                 disp(stateIntv)
+%                 disp(diff)
+%                 disp(rel_pos)
+%                 disp(Seg.bnds)
+                error('No appropriate match 2... Most likely to be implementation error')
+            end
+        end
+
     end
 
     %% Static Methods
@@ -612,6 +694,6 @@ classdef ArcMap < handle
             [~,c] = find(arr==num);
             idx = min(c);
         end
-
+        
     end
 end
