@@ -9,12 +9,15 @@ classdef ArcMap < handle
         segments
         arc_segments = {}
         arc_nodes = {}
+        arc_centers = {}
         segment_info
         lane_prob_thres
         assocL
         assocR
         subseg_cnt = []
-        validity
+        validity 
+        max_err
+        valid_flag = false
         dummy = struct() % Dummy variable for debugging
     end
     
@@ -52,7 +55,7 @@ classdef ArcMap < handle
             % Need to be careful if number of arc segments is changed
             for i=1:length(obj.arc_segments)                
                 obj.arc_segments{i}.kappa = obj.arc_segments{i}.kappa + arc_delta_params{i}.kappa;
-                obj.arc_segments{i}.L = obj.arc_segments{i}.L + arc_delta_params{i}.L;
+                obj.arc_segments{i}.L = ((obj.arc_segments{i}.L).^(1/2) + arc_delta_params{i}.L).^2;
                 obj.arc_segments{i}.x0 = obj.arc_segments{i}.x0 + arc_delta_params{i}.x0;
                 obj.arc_segments{i}.y0 = obj.arc_segments{i}.y0 + arc_delta_params{i}.y0;
                 obj.arc_segments{i}.tau0 = obj.arc_segments{i}.tau0 + arc_delta_params{i}.tau0;
@@ -121,8 +124,10 @@ classdef ArcMap < handle
             % Validity: stores number of invalid measurements for each
             % sub-segment for every segment
             obj.validity = {};
+            obj.max_err = {};
             for i=1:length(obj.arc_segments)
                 obj.validity = [obj.validity {zeros(1,length(obj.arc_segments{i}.kappa))}];
+                obj.max_err = [obj.max_err {zeros(1,length(obj.arc_segments{i}.kappa))}];
             end
             
             if phase == 2
@@ -140,31 +145,51 @@ classdef ArcMap < handle
 
                 for j=lb:ub
                     for k=1:prev_max
-                        leftsubSegIdx = obj.assocL(j,k);
-                        rightsubSegIdx = obj.assocR(j,k);
+                        leftSubSegIdx = obj.assocL(j,k);
+                        rightSubSegIdx = obj.assocR(j,k);
 
-                        if leftsubSegIdx > 0
-                            valid = obj.isValid(leftSegIdx,leftsubSegIdx,j,k,'left');
+                        if leftSubSegIdx > 0
+                            [chisq,valid] = obj.isValid(leftSegIdx,leftSubSegIdx,j,k,'left');
                             if ~valid
-                                obj.validity{leftSegIdx}(leftsubSegIdx) = obj.validity{leftSegIdx}(leftsubSegIdx) + 1;
+                                obj.validity{leftSegIdx}(leftSubSegIdx) = obj.validity{leftSegIdx}(leftSubSegIdx) + 1;
+                                obj.max_err{leftSegIdx}(leftSubSegIdx) = chisq;
                             end
                         end
 
-                        if rightsubSegIdx > 0
-                            valid = obj.isValid(rightSegIdx,rightsubSegIdx,j,k,'right');
+                        if rightSubSegIdx > 0
+                            [chisq,valid] = obj.isValid(rightSegIdx,rightSubSegIdx,j,k,'right');
                             if ~valid
-                                obj.validity{rightSegIdx}(rightsubSegIdx) = obj.validity{rightSegIdx}(rightsubSegIdx) + 1;
+                                obj.validity{rightSegIdx}(rightSubSegIdx) = obj.validity{rightSegIdx}(rightSubSegIdx) + 1;
+                                obj.max_err{rightSegIdx}(rightSubSegIdx) = chisq;
                             end
                         end
                     end
                 end
             end
 
-            % Add new segments for the most "invalid" sub-segment
+            % Add new segments for the most "invalid" sub-segment  
+            % if there are more than 2 "invalid" measurements
+            
+            disp('====================<Adding Segments>====================')
+            obj.valid_flag = true;
             for i=1:length(obj.validity)
-                [~,badsubSegIdx] = max(obj.validity{i});
-                obj.replicate(i,badsubSegIdx);
+                % Among invalid sub-segments, choose sub-segment with the
+                % largest chi-square test error
+                org_idxs = 1:length(obj.validity{i});
+                trimmed_idxs = org_idxs(obj.validity{i} > 2);
+                max_errs = obj.max_err{i}(obj.validity{i} > 2);
+                
+                if ~isempty(max_errs)                    
+                    [~,idx] = max(max_errs);
+                    badSubSegIdx = trimmed_idxs(idx);
+                    obj.replicate(i,badSubSegIdx);
+                    obj.valid_flag = false;
+                end                
             end
+            if obj.valid_flag
+                disp('All segments are valid, optimization finished...')
+            end
+            disp('=========================================================')
 
             obj.associate(phase);
         end
@@ -247,17 +272,26 @@ classdef ArcMap < handle
                     initParams.bnds = [initParams.bnds; initSegments{j}.bnds];
                     initParams.kappa = [initParams.kappa initSegments{j}.kappa];
                     initParams.L = [initParams.L initSegments{j}.L];
-                    if j == 1
-                        initParams.xc = initParams.x0 - 1/initParams.kappa(end) * sin(heading);
-                        initParams.yc = initParams.y0 + 1/initParams.kappa(end) * cos(heading);
-                    else
-                        initParams.xc = [initParams.xc initParams.xc(end) + (1/initParams.kappa(end-1) - 1/initParams.kappa(end)) * sin(heading)];
-                        initParams.yc = [initParams.yc initParams.yc(end) - (1/initParams.kappa(end-1) - 1/initParams.kappa(end)) * cos(heading)];
-                    end
+%                     if j == 1
+%                         initParams.xc = initParams.x0 - 1/initParams.kappa(end) * sin(heading);
+%                         initParams.yc = initParams.y0 + 1/initParams.kappa(end) * cos(heading);
+%                     else
+%                         initParams.xc = [initParams.xc initParams.xc(end) + (1/initParams.kappa(end-1) - 1/initParams.kappa(end)) * sin(heading)];
+%                         initParams.yc = [initParams.yc initParams.yc(end) - (1/initParams.kappa(end-1) - 1/initParams.kappa(end)) * cos(heading)];
+%                     end
                     heading = heading + initParams.kappa(end) * initParams.L(end);
                 end
+                % Find corresponding state_idx for initParams.bnds
+                [~,c] = find(obj.segment_info == i);
+                stateIntvs = obj.lane.FactorValidIntvs(c(1):c(end),1:2);
+                initParams.initIdxs = zeros(1,size(initParams.bnds,1));
+
+                for j=1:size(initParams.bnds,1)
+                    initParams.initIdxs(j) = obj.findStateIdx(stateIntvs,initParams.bnds(j,2));
+                end
+
                 obj.arc_segments = [obj.arc_segments {initParams}];
-                obj.subseg_cnt = [obj.subseg_cnt length(initParams.kappa)];
+                obj.subseg_cnt = [obj.subseg_cnt length(initParams.kappa)];                
             end
             
 
@@ -296,7 +330,7 @@ classdef ArcMap < handle
             % Adjust this value to increase or decrease the number of line
             % interpolation. Typically, values smaller than 0.3m is
             % recommended.
-            line_acc_thres = 0.2;
+            line_acc_thres = 0.1;
 
             %% Create Line and visualize current segmentation state 
             init_point = LP(:,intv(1));
@@ -341,7 +375,7 @@ classdef ArcMap < handle
             % save data. Since covariance or weight data of lane points are
             % not available, use rmse error for determining the 'goodness'
             % of circular fitting.
-            rmse_thres = 1;
+            rmse_thres = 0.5;
             lb = 1; n = numel(intvL); cnt = 1;
             
             initSegments = {};
@@ -372,7 +406,7 @@ classdef ArcMap < handle
                 % Current sensor fusion model merge lanes almost perfectly,
                 % so setting err_thres to about 1m will be fine.
                 
-                err_thres = 1; 
+                err_thres = 1.5; 
                 while max_fit_err < err_thres
                     % Upper bound is found randomly between (lb+1,n) so that
                     % maximum circular fitting error is between values 3 and 5
@@ -435,15 +469,25 @@ classdef ArcMap < handle
                 heading = seg.tau0;
                 segPoints = [seg.x0;
                              seg.y0];
-                for j=1:m                    
+                for j=1:m            
+                    % Propagate and save subsegment node points
                     kappa = seg.kappa(j); L = seg.L(j);
                     headingPrev = heading;
                     heading = heading + kappa * L;
                     headingCurr = heading;
                     segPoints = [segPoints segPoints(:,end) + 1/kappa * [sin(headingCurr) - sin(headingPrev);
                                                                         -cos(headingCurr) + cos(headingPrev)]];
+                    
+                    % Propagate and save subsegment arc center points
+                    if j == 1
+                        cPoints = [seg.x0 - 1/kappa * sin(headingPrev);
+                                   seg.y0 + 1/kappa * cos(headingPrev)];
+                    else
+                        cPoints = [cPoints cPoints(:,end) + (1/seg.kappa(j-1) - 1/seg.kappa(j)) * [sin(headingPrev);-cos(headingPrev)]];
+                    end
                 end
                 obj.arc_nodes = [obj.arc_nodes {segPoints}];
+                obj.arc_centers = [obj.arc_centers {cPoints}];
             end
 
             % Data Association
@@ -466,11 +510,6 @@ classdef ArcMap < handle
                 leftSegmentIdx = obj.segment_info(1,i);
                 rightSegmentIdx = obj.segment_info(2,i);
 
-                leftSegPoints = obj.arc_nodes{leftSegmentIdx};
-                rightSegPoints = obj.arc_nodes{rightSegmentIdx};
-                leftSegment = obj.arc_segments{leftSegmentIdx};
-                rightSegment = obj.arc_segments{rightSegmentIdx};
-
                 % Perform matching for valid points
                 for j=lb:ub
                     lane_idx = obj.lane.state_idxs(j);                    
@@ -482,15 +521,15 @@ classdef ArcMap < handle
                             rel_pos = [10*(k-1);0;0];
                             pos = P + R * rel_pos;
                             
-                            segIdxL = obj.match(pos,R,leftSegPoints,leftSegment);
-                            segIdxR = obj.match(pos,R,rightSegPoints,rightSegment);
+                            segIdxL = obj.match(pos,R,leftSegmentIdx);
+                            segIdxR = obj.match(pos,R,rightSegmentIdx);
 
                             obj.assocL(j,k) = segIdxL;
                             obj.assocR(j,k) = segIdxR;
                         end
                     else % For low reliability lane measurement, use only 0m preview measurement                        
-                        segIdxL = obj.match(P,R,leftSegPoints,leftSegment);
-                        segIdxR = obj.match(P,R,rightSegPoints,rightSegment);
+                        segIdxL = obj.match(P,R,leftSegmentIdx);
+                        segIdxR = obj.match(P,R,rightSegmentIdx);
 
                         obj.assocL(j,1) = segIdxL;
                         obj.assocR(j,1) = segIdxR;
@@ -500,7 +539,7 @@ classdef ArcMap < handle
         end
         
         %% Check validity for each specific cases
-        function flag = isValid(obj,segIdx,subsegIdx,state_idx,prev_idx,dir)
+        function [chisq,flag] = isValid(obj,segIdx,subsegIdx,state_idx,prev_idx,dir)
             seg = obj.arc_segments{segIdx};
             kappa = seg.kappa(1:subsegIdx); L = seg.L(1:subsegIdx);
             x0 = seg.x0; y0 = seg.y0; tau0 = seg.tau0;
@@ -543,31 +582,51 @@ classdef ArcMap < handle
         end
         
         %% Replicate invalid segment for new optimization
-        function obj = replicate(obj,segIdx,subsegIdx)
+        function obj = replicate(obj,segIdx,SubSegIdx)
             seg = obj.arc_segments{segIdx};
-            kappa = seg.kappa(subsegIdx); L = seg.L(subsegIdx);
+            kappa = seg.kappa(SubSegIdx); L = seg.L(SubSegIdx);
+            
+            % We assume that for segment with one sub-segments are
+            % well-optimized(Naively replicating this case will cause
+            % singularity errors)
+
+            if length(seg.kappa) == 1
+                error(['Cannot replicate from segments with only one sub-segment,' ...
+                       'lower initial parametrization error threshold to create' ...
+                       'more than one sub-segment'])
+            end
 
             % Create replica by halving the original arc length
-            if subsegIdx == 1
-                seg.kappa = [kappa seg.kappa];
-                seg.L(subsegIdx) = 1/2 * seg.L(subsegIdx);
+            % Re-calculate curvature values
+            if SubSegIdx == 1
+                seg.L(SubSegIdx) = 1/2 * seg.L(SubSegIdx);
                 seg.L = [L/2 seg.L];
-            elseif subsegIdx == length(seg.kappa)
-                seg.kappa = [seg.kappa kappa];
-                seg.L(subsegIdx) = 1/2 * seg.L(subsegIdx);
+                
+                rem_kappa = seg.kappa(SubSegIdx+1:end);
+                next_kappa = seg.kappa(SubSegIdx+1);
+                seg.kappa = [kappa, (kappa + next_kappa)/2, rem_kappa];                
+
+            elseif SubSegIdx == length(seg.kappa)                
+                seg.L(SubSegIdx) = 1/2 * seg.L(SubSegIdx);
                 seg.L = [seg.L L/2];
+                rem_kappa = seg.kappa(1:SubSegIdx-1);
+                prev_kappa = seg.kappa(SubSegIdx-1);
+                seg.kappa = [rem_kappa, (prev_kappa + kappa)/2, kappa];
             else
-                kappaF = seg.kappa(1:subsegIdx-1);
-                kappaB = seg.kappa(subsegIdx+1:end);
-                LF = seg.L(1:subsegIdx-1);
-                LB = seg.L(subsegIdx+1:end);
-                seg.kappa = [kappaF kappa kappa kappaB];
-                seg.L = [LF 1/2*L 1/2 * L LB];
+                kappaF = seg.kappa(1:SubSegIdx-1);
+                kappaB = seg.kappa(SubSegIdx+1:end);
+                LF = seg.L(1:SubSegIdx-1);
+                LB = seg.L(SubSegIdx+1:end);
+                kappaF_ = (kappaF(end)+kappa)/2;
+                kappaB_ = (kappa + kappaB(1))/2;
+                seg.kappa = [kappaF kappaF_ kappaB_ kappaB];
+                seg.L = [LF 1/2*L 1/2*L LB];
             end
 
             % Update segment info
             obj.arc_segments{segIdx} = seg;
             obj.subseg_cnt(segIdx) = obj.subseg_cnt(segIdx) + 1;
+            disp(['SubSegment added at Segment Idx ',num2str(segIdx),', SubSegment Idx ',num2str(SubSegIdx)])
         end
         
          %% Find initial data association match
@@ -609,21 +668,15 @@ classdef ArcMap < handle
                 error('No appropriate match 2... Most likely to be implementation error')
             end
         end
-
-    end
-
-    %% Static Methods
-    methods (Static)
-        %% Get random integer with bnds
-        function val = randint(val1,val2)
-            % find val from [val1, val2] randomly
-            val = val1-1+randi(val2-val1+1);
-        end
         
-        %% Point-Segment Matching
-        function segIdx = match(pos,att,segPoints,segments)
+        %% Point-SubSegment Matching
+        function SubSegIdx = match(obj,pos,att,SegIdx)
             % May need to fix
             % Matching is performed in 2D manner
+            segPoints = obj.arc_nodes{SegIdx};
+            segCenters = obj.arc_centers{SegIdx};
+            seg = obj.arc_segments{SegIdx};
+
             n = size(segPoints,2);
             
             rpy = dcm2rpy(att); psi = rpy(3);
@@ -654,9 +707,7 @@ classdef ArcMap < handle
                 if idx == 1
                     % Matching Success
                     % Compute arc center to vehicle distance
-
-                    arc_c = [segments.xc(i); segments.yc(i)];
-                    dist = abs(sqrt(([xv;yv] - arc_c)' * ([xv;yv] - arc_c)) - abs(1/segments.kappa(i)));
+                    dist = abs(sqrt(([xv;yv] - segCenters(:,i))' * ([xv;yv] - segCenters(:,i))) - abs(1/seg.kappa(i)));
                     
                     cand = [cand [i;dist]];
                 end
@@ -666,10 +717,20 @@ classdef ArcMap < handle
                 % If match candidate exists, pick the one with smallest
                 % matching error as the correct match
                 [~,idx] = min(cand(2,:));
-                segIdx = cand(1,idx);
+                SubSegIdx = cand(1,idx);
             else
-                segIdx = 0;
+                SubSegIdx = 0;
             end
+        end
+
+    end
+
+    %% Static Methods
+    methods (Static)
+        %% Get random integer with bnds
+        function val = randint(val1,val2)
+            % find val from [val1, val2] randomly
+            val = val1-1+randi(val2-val1+1);
         end
         
         %% Compute center points of arcs, given parameters
@@ -695,5 +756,14 @@ classdef ArcMap < handle
             idx = min(c);
         end
         
+         %% Find state_idx from segment bnds
+         function state_idx = findStateIdx(Intvs,num)
+            augIdxs = [];            
+            for i=1:size(Intvs,1)
+                augIdxs = [augIdxs Intvs(i,1):Intvs(i,2)];
+            end
+            state_idx = augIdxs(num);
+        end
+
     end
 end

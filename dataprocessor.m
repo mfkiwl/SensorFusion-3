@@ -350,6 +350,13 @@ classdef dataprocessor < handle
             % during lane change
             % May not be using can information directly in the future
             % Lane Change Detection (윤진형)
+            % 
+            % * Need to differentiate lane change with left/right turns
+            % How??
+            %
+            % Method 1: Lane Curvature
+            % Method 2: IMU 
+
 
 %             can_lane_idxs = [];
 % 
@@ -379,9 +386,20 @@ classdef dataprocessor < handle
                     end
                 end
             end
+
+            % Remove last "right turn" as it is not a lane change scenario
+            % This part should be changed for other dataset
+
+            LC_intvs = LC_intvs(1:end-1,:);
+            LC_dirs = LC_dirs(1:end-1);
             obj.proc_data.can.LC_intvs = LC_intvs;
             obj.proc_data.lane.LC_dirs = LC_dirs;
+                
             
+
+
+
+
 %             figure(1);
 %             plot(obj.raw_data.can.t,obj.raw_data.can.leftBlinker,'r-'); hold on; grid on;
 %             plot(obj.raw_data.can.t,obj.raw_data.can.rightBlinker,'b-');
