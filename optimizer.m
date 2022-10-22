@@ -201,7 +201,7 @@ classdef optimizer < handle
                 elseif strcmp(obj.opt.options.Algorithm,'TR')
                     obj.TrustRegion();
                 end
-
+                obj.map.validate(obj.phase);
                 % Step 2: Validate and perform data association
                 obj.map.validate(obj.phase);
                 valid = obj.map.valid_flag; % create function to determine validity
@@ -229,8 +229,8 @@ classdef optimizer < handle
 
                     obj.opt.iter = obj.opt.iter + 1;
                 end
-                
-                obj.phase = obj.phase + 1;
+%                 
+%                 obj.phase = obj.phase + 1;
 %                 Phase 3 Optimization
 %                 Extend measurement equation to user-defined preview
 %                 distance measurements. Optimization concept is the same
@@ -253,6 +253,7 @@ classdef optimizer < handle
 
             end
         end
+
             
         %% Visualize
         function visualize(obj)
@@ -404,7 +405,7 @@ classdef optimizer < handle
             title('Optimized Accel Bias Comparison')
             legend('abx','aby','abz')
 
-            if strcmp(obj.mode,'partial')
+            if ~strcmp(obj.mode,'basic')
                 figure(8); 
                 plot(obj.t,S); grid on;
                 xlabel('Time(s)'); ylabel('Wheel Speed Scaling Factor')
@@ -1401,60 +1402,60 @@ classdef optimizer < handle
                 % For phase 2, step 1, additional model for every
                 % sub-segment should be considered.
                 I = []; J = []; V = [];
-                AS2_resR = [];
-                blk_heightR = 0;
+%                 AS2_resR = [];
+%                 blk_heightR = 0;
 
-                if obj.opt.iter == 1 % Step 1
-                    % Find bnds(i,2)'s state idx (except last point)
-                    cnt = 1;
-                    blk_heightR = 2 * sum(obj.map.subseg_cnt - 1);
-                    AS2_resR = zeros(blk_heightR,1);
+                
+                % Find bnds(i,2)'s state idx (except last point)
+                cnt = 1;
+                blk_heightR = 2 * sum(obj.map.subseg_cnt - 1);
+                AS2_resR = zeros(blk_heightR,1);
 
-                    for i=1:n
-                        seg = obj.map.arc_segments{i};
-                        [r,c] = find(obj.map.segment_info == i);
-                        stateIntvs = obj.lane.FactorValidIntvs(c(1):c(end),1:2);
-                        
-                        for j=1:length(seg.initIdxs)-1
-                            state_idx = seg.initIdxs(j);
-                            for k=1:size(stateIntvs,1)
-                                if stateIntvs(k,1) <= state_idx && stateIntvs(k,2) >= state_idx
-                                    row = r(k);
-                                end
+                for i=1:n
+                    seg = obj.map.arc_segments{i};
+                    [r,c] = find(obj.map.segment_info == i);
+                    stateIntvs = obj.lane.FactorValidIntvs(c(1):c(end),1:2);
+                    
+                    for j=1:length(seg.stateIdxs)-1
+                        state_idx = seg.stateIdxs(j);
+                        for k=1:size(stateIntvs,1)
+                            if stateIntvs(k,1) <= state_idx && stateIntvs(k,2) >= state_idx
+                                row = r(k);
                             end
-
-                            if row == 1
-                                dir = 'left';
-                            elseif row == 2
-                                dir = 'right';
-                            end
-
-                            R = obj.states{state_idx}.R; P = obj.states{state_idx}.P;
-                            lane_idx = obj.lane.state_idxs(state_idx);
-
-                            initParams = [seg.x0, seg.y0, seg.tau0];
-                            kappa = seg.kappa; L = seg.L;
-                            [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = ...
-                            obj.getAS2JacPh2(R,P,initParams,kappa,L,lane_idx,dir,j);
-                            
-                            AS2_resR(2*cnt-1:2*cnt) = anchored_res;
-
-                            idx = 16 * m + obj.opt.seg_tracker(i);
-                            idxk = idx + 3;
-                            idxl = idx + 3 + length(kappa);
-                            [I_r,J_r,V_r] = sparseFormat(2*cnt-1:2*cnt,9*(state_idx-1)+1:9*(state_idx-1)+3,r_jac);
-                            [I_p,J_p,V_p] = sparseFormat(2*cnt-1:2*cnt,9*(state_idx-1)+7:9*(state_idx-1)+9,p_jac);
-                            [I_P,J_P,V_P] = sparseFormat(2*cnt-1:2*cnt,idx+1:idx+3,param_jac);
-                            [I_k,J_k,V_k] = sparseFormat(2*cnt-1:2*cnt,idxk+1:idxk+length(kappa),kappa_jac);
-                            [I_l,J_l,V_l] = sparseFormat(2*cnt-1:2*cnt,idxl+1:idxl+length(L),L_jac);
-
-                            I = [I I_r I_p I_P I_k I_l];
-                            J = [J J_r J_p J_P J_k J_l];
-                            V = [V V_r V_p V_P V_k V_l];
-                            cnt = cnt + 1;
                         end
+
+                        if row == 1
+                            dir = 'left';
+                        elseif row == 2
+                            dir = 'right';
+                        end
+
+                        R = obj.states{state_idx}.R; P = obj.states{state_idx}.P;
+                        lane_idx = obj.lane.state_idxs(state_idx);
+
+                        initParams = [seg.x0, seg.y0, seg.tau0];
+                        kappa = seg.kappa; L = seg.L;
+                        [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = ...
+                        obj.getAS2JacPh2(R,P,initParams,kappa,L,lane_idx,dir,j);
+                        
+                        AS2_resR(2*cnt-1:2*cnt) = anchored_res;
+
+                        idx = 16 * m + obj.opt.seg_tracker(i);
+                        idxk = idx + 3;
+                        idxl = idx + 3 + length(kappa);
+                        [I_r,J_r,V_r] = sparseFormat(2*cnt-1:2*cnt,9*(state_idx-1)+1:9*(state_idx-1)+3,r_jac);
+                        [I_p,J_p,V_p] = sparseFormat(2*cnt-1:2*cnt,9*(state_idx-1)+7:9*(state_idx-1)+9,p_jac);
+                        [I_P,J_P,V_P] = sparseFormat(2*cnt-1:2*cnt,idx+1:idx+3,param_jac);
+                        [I_k,J_k,V_k] = sparseFormat(2*cnt-1:2*cnt,idxk+1:idxk+length(kappa),kappa_jac);
+                        [I_l,J_l,V_l] = sparseFormat(2*cnt-1:2*cnt,idxl+1:idxl+length(L),L_jac);
+
+                        I = [I I_r I_p I_P I_k I_l];
+                        J = [J J_r J_p J_P J_k J_l];
+                        V = [V V_r V_p V_P V_k V_l];
+                        cnt = cnt + 1;
                     end
                 end
+                
 
                 AS2_res = vertcat(AS2_resF,AS2_resB,AS2_resR);
                 AS2_jacF = sparse(I_F,J_F,V_F,blk_height,blk_width);

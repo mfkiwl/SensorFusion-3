@@ -36,7 +36,7 @@ classdef ArcMap < handle
             obj.InitSegmentParametrization();
 
             % Data Association
-            obj.InitDataAssociation();% --> initial data association is done using init segmentation information
+            obj.DataAssociation();% --> initial data association is done using init segmentation information
         end
         
         %% Map Update
@@ -173,25 +173,31 @@ classdef ArcMap < handle
             disp('====================<Adding Segments>====================')
             obj.valid_flag = true;
             for i=1:length(obj.validity)
-                % Among invalid sub-segments, choose sub-segment with the
-                % largest chi-square test error
-                org_idxs = 1:length(obj.validity{i});
-                trimmed_idxs = org_idxs(obj.validity{i} > 2);
-                max_errs = obj.max_err{i}(obj.validity{i} > 2);
-                
-                if ~isempty(max_errs)                    
-                    [~,idx] = max(max_errs);
-                    badSubSegIdx = trimmed_idxs(idx);
+                % Choose Sub-segment with the most number of invalid
+                % measurements as the replication target
+                [max_val,badSubSegIdx] = max(obj.validity{i});
+                if max_val > 2
                     obj.replicate(i,badSubSegIdx);
                     obj.valid_flag = false;
-                end                
+                end
+
+%                 org_idxs = 1:length(obj.validity{i});
+%                 trimmed_idxs = org_idxs(obj.validity{i} > 2);
+%                 max_errs = obj.max_err{i}(obj.validity{i} > 2);
+%                 
+%                 if ~isempty(max_errs)                    
+%                     [~,idx] = max(max_errs);
+%                     badSubSegIdx = trimmed_idxs(idx);
+%                     obj.replicate(i,badSubSegIdx);
+%                     obj.valid_flag = false;
+%                 end                
             end
             if obj.valid_flag
                 disp('All segments are valid, optimization finished...')
             end
             disp('=========================================================')
 
-            obj.associate(phase);
+            obj.DataAssociation();
         end
        
     end
@@ -284,10 +290,10 @@ classdef ArcMap < handle
                 % Find corresponding state_idx for initParams.bnds
                 [~,c] = find(obj.segment_info == i);
                 stateIntvs = obj.lane.FactorValidIntvs(c(1):c(end),1:2);
-                initParams.initIdxs = zeros(1,size(initParams.bnds,1));
+                initParams.stateIdxs = zeros(1,size(initParams.bnds,1));
 
                 for j=1:size(initParams.bnds,1)
-                    initParams.initIdxs(j) = obj.findStateIdx(stateIntvs,initParams.bnds(j,2));
+                    initParams.stateIdxs(j) = obj.findStateIdx(stateIntvs,initParams.bnds(j,2));
                 end
 
                 obj.arc_segments = [obj.arc_segments {initParams}];
@@ -298,7 +304,7 @@ classdef ArcMap < handle
         end
         
         %% Initial Data Association
-        function obj = InitDataAssociation(obj)
+        function obj = DataAssociation(obj)
             % Initial Data Association for phase 2 optimization
             obj.assocL = zeros(length(obj.states),obj.lane.prev_num);
             obj.assocR = obj.assocL;
@@ -312,8 +318,8 @@ classdef ArcMap < handle
 
                 for j=lb:ub
                     % do not compare with rel idx
-                    obj.assocL(j,1) = obj.initDataAssocMatch(leftSegIdx,j);
-                    obj.assocR(j,1) = obj.initDataAssocMatch(rightSegIdx,j);
+                    obj.assocL(j,1) = obj.DataAssocMatch(leftSegIdx,j);
+                    obj.assocR(j,1) = obj.DataAssocMatch(rightSegIdx,j);
                 end
             end
         end
@@ -582,8 +588,8 @@ classdef ArcMap < handle
         end
         
         %% Replicate invalid segment for new optimization
-        function obj = replicate(obj,segIdx,SubSegIdx)
-            seg = obj.arc_segments{segIdx};
+        function obj = replicate(obj,SegIdx,SubSegIdx)
+            seg = obj.arc_segments{SegIdx};
             kappa = seg.kappa(SubSegIdx); L = seg.L(SubSegIdx);
             
             % We assume that for segment with one sub-segments are
@@ -598,39 +604,88 @@ classdef ArcMap < handle
 
             % Create replica by halving the original arc length
             % Re-calculate curvature values
+            % Update bnds values
             if SubSegIdx == 1
                 seg.L(SubSegIdx) = 1/2 * seg.L(SubSegIdx);
                 seg.L = [L/2 seg.L];
                 
                 rem_kappa = seg.kappa(SubSegIdx+1:end);
                 next_kappa = seg.kappa(SubSegIdx+1);
-                seg.kappa = [kappa, (kappa + next_kappa)/2, rem_kappa];                
+                
+%                 seg.kappa = [kappa, (kappa + next_kappa)/2, rem_kappa];   
+
+%                 new_kappa = 2/(1/kappa + 1/next_kappa);
+%                 seg.kappa = [kappa, new_kappa, rem_kappa];
+
+                seg.kappa = [kappa, kappa, rem_kappa];
+                
+                rem_bnds = seg.bnds(SubSegIdx+1:end,:);
+                curr_lb = seg.bnds(SubSegIdx,1); curr_ub = seg.bnds(SubSegIdx,2);
+                new_bnd = ceil((curr_lb + curr_ub)/2);
+                new_bnds = [curr_lb new_bnd;
+                            new_bnd curr_ub];
+                seg.bnds = [new_bnds; rem_bnds];
 
             elseif SubSegIdx == length(seg.kappa)                
                 seg.L(SubSegIdx) = 1/2 * seg.L(SubSegIdx);
                 seg.L = [seg.L L/2];
                 rem_kappa = seg.kappa(1:SubSegIdx-1);
                 prev_kappa = seg.kappa(SubSegIdx-1);
-                seg.kappa = [rem_kappa, (prev_kappa + kappa)/2, kappa];
+%                 seg.kappa = [rem_kappa, (prev_kappa + kappa)/2, kappa];
+                
+%                 new_kappa = 2/(1/kappa + 1/prev_kappa);
+%                 seg.kappa = [rem_kappa, new_kappa, kappa];
+
+                seg.kappa = [rem_kappa, kappa, kappa];
+
+                rem_bnds = seg.bnds(1:SubSegIdx-1,:);
+                curr_lb = seg.bnds(SubSegIdx,1); curr_ub = seg.bnds(SubSegIdx,2);
+                new_bnd = ceil((curr_lb + curr_ub)/2);
+                new_bnds = [curr_lb new_bnd;
+                            new_bnd curr_ub];
+                seg.bnds = [rem_bnds; new_bnds];
+
             else
                 kappaF = seg.kappa(1:SubSegIdx-1);
                 kappaB = seg.kappa(SubSegIdx+1:end);
                 LF = seg.L(1:SubSegIdx-1);
                 LB = seg.L(SubSegIdx+1:end);
-                kappaF_ = (kappaF(end)+kappa)/2;
-                kappaB_ = (kappa + kappaB(1))/2;
-                seg.kappa = [kappaF kappaF_ kappaB_ kappaB];
+
+%                 kappaF_ = (kappaF(end)+kappa)/2;
+%                 kappaB_ = (kappa + kappaB(1))/2;
+%                 seg.kappa = [kappaF kappaF_ kappaB_ kappaB];
+                
+%                 kappaF_ = 2/(1/kappaF(end) + 1/kappa);
+%                 kappaB_ = 2/(1/kappa + 1/kappaB(1));
+%                 seg.kappa = [kappaF kappaF_ kappaB_ kappaB];
+
+                seg.kappa = [kappaF, kappa, kappa, kappaB];
                 seg.L = [LF 1/2*L 1/2*L LB];
+
+                bndsF = seg.bnds(1:SubSegIdx-1,:);
+                bndsB = seg.bnds(SubSegIdx+1:end,:);
+                curr_lb = seg.bnds(SubSegIdx,1); curr_ub = seg.bnds(SubSegIdx,2);
+                new_bnd = ceil((curr_lb + curr_ub)/2);
+                new_bnds = [curr_lb new_bnd;
+                            new_bnd curr_ub];
+                seg.bnds = [bndsF; new_bnds; bndsB];
+            end
+            % Update stateIdxs for segments
+            [~,c] = find(obj.segment_info == SegIdx);
+            stateIntvs = obj.lane.FactorValidIntvs(c(1):c(end),1:2);
+            seg.stateIdxs = zeros(1,size(seg.bnds,1));
+            for i=1:size(seg.bnds,1)
+                seg.stateIdxs(i) = obj.findStateIdx(stateIntvs,seg.bnds(i,2));
             end
 
             % Update segment info
-            obj.arc_segments{segIdx} = seg;
-            obj.subseg_cnt(segIdx) = obj.subseg_cnt(segIdx) + 1;
-            disp(['SubSegment added at Segment Idx ',num2str(segIdx),', SubSegment Idx ',num2str(SubSegIdx)])
+            obj.arc_segments{SegIdx} = seg;
+            obj.subseg_cnt(SegIdx) = obj.subseg_cnt(SegIdx) + 1;
+            disp(['SubSegment added at Segment Idx ',num2str(SegIdx),', SubSegment Idx ',num2str(SubSegIdx)])
         end
         
          %% Find initial data association match
-        function idx = initDataAssocMatch(obj,SegIdx,state_idx)
+         function idx = DataAssocMatch(obj,SegIdx,state_idx)
             idx = 0;
             [~,c] = find(obj.segment_info == SegIdx);
             stateIntv = obj.lane.FactorValidIntvs(c(1):c(end),:);
@@ -742,8 +797,8 @@ classdef ArcMap < handle
                     xc = x0 - 1/kappa(j) * sin(heading);
                     yc = y0 + 1/kappa(j) * cos(heading);
                 else
-                    xc = [xc xc(end) + (1/kappa(j-1) - 1/kappa(j)) * sin(heading)];
-                    yc = [yc yc(end) - (1/kappa(j-1) - 1/kappa(j)) * cos(heading)];
+                    xc = xc + (1/kappa(j-1) - 1/kappa(j)) * sin(heading);
+                    yc = yc - (1/kappa(j-1) - 1/kappa(j)) * cos(heading);
                 end
                 heading = heading + kappa(j) * L(j);
             end

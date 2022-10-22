@@ -98,10 +98,15 @@ sol.full.optimize();
 % Switch optimization mode to 2-phase and optimize with lane data
 sol.full.opt.options.Algorithm = 'TR';
 sol.full.update('2-phase'); % Update mode to 2-phase
-%%
 sol.full.optimize();
 
 %%
 
-% sol.full.visualize();
+sol.full.visualize();
+
+%% 
 sol.full.map.visualize2DMap();
+
+
+%%
+sol.full.optimize2();
