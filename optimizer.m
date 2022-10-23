@@ -118,6 +118,7 @@ classdef optimizer < handle
                 % Create and initialize Map
                 % Initial segmentation and data association is done in this
                 % step automatically
+                % Complete arc fitting is done in this step
                 obj.map = ArcMap(obj.states,obj.lane,obj.lane.prob_thres); 
             end           
         end
@@ -161,60 +162,29 @@ classdef optimizer < handle
                 % Phase 2 Optimization
                 % 
                 % =================<Optimization step>=================
-                % 1. Fully converge the problem using fixed data
-                % association from initial segmentation information, using
-                % only the 0m previewed measurements.
+                % 1. Perform data association with current optimized
+                % vehicle states and arc parameters
                 %
-                % 2. Validate sub optimal parametrization results, and add
-                % subsegments if needed. Perform data association for both 
-                % 0m previewed measurements and longer preview distance
-                % measurement points.
-                % 
-                % 3. Fully converge the problem using fixed data
-                % association for 0m previewed measurements, but
-                % iteratively perform data association for other previewed
-                % point measurement points.
+                % 2. Fully converge the problem with iterative data
+                % association
                 %
-                % 4. Validate optimization results and add subsegments if
-                % needed. Perform data association for both 0m previewed
-                % measurements and other preview distance measurements.
+                % 3. Validate optimization results and add subsegments if
+                % needed. 
                 %
-                % 5. Until all segments are valid, repeat steps 3 ~ 4.
+                % 4. Until all segments are valid, repeat steps 1 ~ 3.
                 % =====================================================
                 %
                 
-                obj.opt.options.IterThres = 100;
-                obj.updateTracker();                
-                num = obj.opt.seg_tracker(end);
-                cumSum = cumsum(3 + 2*obj.map.subseg_cnt);
-                if num ~= cumSum(end)
-                    error('Number of variables are not matched')
-                end
-                obj.opt.x0 = zeros(16*n + num,1);
-                
-                % Step 1: Optimization based on initial data association
-                if strcmp(obj.opt.options.Algorithm,'GN')
-                    obj.GaussNewton();
-                elseif strcmp(obj.opt.options.Algorithm,'LM')
-                    obj.LevenbergMarquardt();
-                elseif strcmp(obj.opt.options.Algorithm,'TR')
-                    obj.TrustRegion();
-                end
-                
                 obj.phase = 2;
-                % Step 2: Validate and perform data association for both 0m
-                % and other preview distance measurements
-                obj.map.validate(obj.phase);
-                valid = obj.map.valid_flag; % create function to determine validity
-                
                 obj.opt.options.IterThres = 50;
+                valid = false;
 
                 while ~valid
                     
                     obj.updateTracker();                    
                     obj.opt.x0 = zeros(16*n + obj.opt.seg_tracker(end),1);
 
-                    % Step 3: Full Convergence 
+                    % Step 2: Full Convergence 
                     if strcmp(obj.opt.options.Algorithm,'GN')
                         obj.GaussNewton();
                     elseif strcmp(obj.opt.options.Algorithm,'LM')
@@ -223,22 +193,22 @@ classdef optimizer < handle
                         obj.TrustRegion();
                     end
                     
-                    % Step 4: Validate and perform data association 
+                    % Step 3: Validate and perform data association 
                     % Create new arc segments if needed 
                     obj.map.validate(obj.phase);
+                    % Step 1 is done inside the validation function
                     valid = obj.map.valid_flag;
-                end
-                
-                % Step 5: Repeat 3 ~ 4 until all segments are valid
-                % Show optimization results after optimization
-                % 
-                % Number of Sub-segments for each segments
-                % Summary for each Sub-segments: Curvature, Arc Length
-                % Summary for each Segments: Curvature, Arc Length
+
+                    % Step 4: Repeat 1 ~ 3 until all segments are valid
+                    % Show optimization results after optimization
+                    % 
+                    % Number of Sub-segments for each segments
+                    % Summary for each Sub-segments: Curvature, Arc Length
+                    % Summary for each Segments: Curvature, Arc Length
+                end               
             end
         end
-
-            
+         
         %% Visualize
         function visualize(obj)
             n = length(obj.states);
@@ -915,19 +885,9 @@ classdef optimizer < handle
             [GNSS_res,GNSS_jac] = obj.CreateGNSSBlock();
             [WSS_res,WSS_jac] = obj.CreateWSSBlock();
             
-            if obj.phase == 2
-                [AS_res,AS_jac] = obj.CreateASBlockPh2();
-                [AS2_res,AS2_jac] = obj.CreateAS2BlockPh2();
-            elseif obj.phase == 3
-                [AS_res,AS_jac] = obj.CreateASBlockPh3();
-                [AS2_res,AS2_jac] = obj.CreateAS2BlockPh3();
-            else
-                AS_res = []; AS_jac = [];
-                AS2_res = []; AS2_jac = [];
-            end
-%             if obj.phase == 2
-%                 error('1');
-%             end
+            [AS_res,AS_jac] = obj.CreateASBlock();
+            [AS2_res,AS2_jac] = obj.CreateAS2Block();
+            
             res = vertcat(Pr_res,MM_res,GNSS_res,WSS_res,AS_res,AS2_res);
             jac = vertcat(Pr_jac,MM_jac,GNSS_jac,WSS_jac,AS_jac,AS2_jac);            
         end
@@ -1199,11 +1159,9 @@ classdef optimizer < handle
             end
         end
         
-        %% Arc Spline based Measurement Residual and Jacobian Phase 2
-        function [AS_res,AS_jac] = CreateASBlockPh2(obj)
+        %% Arc Spline based Measurement Residual and Jacobian 
+        function [AS_res,AS_jac] = CreateASBlock(obj)
             % Arc Spline based lane measurement model, Phase 2
-            % Measurement is performed only based on the 0m preview points,
-            % for stable convergence.
             % Pre-computed data association matrix is used for state-map
             % segment matching
             if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
@@ -1248,70 +1206,77 @@ classdef optimizer < handle
                         P = obj.states{j}.P;
                         lane_idx = obj.lane.state_idxs(j);
                         
-                        % Need to add another loop for phase 3
-                        leftSubSegIdx = obj.map.assocL(j,1);
-                        rightSubSegIdx = obj.map.assocR(j,1);
-
-                        if leftSubSegIdx > 0
-                            initParams = [leftSeg.x0, leftSeg.y0, leftSeg.tau0];
-                            [r_jac, p_jac, param_jac, kappa_jac, L_jac, anchored_res] = ...
-                            obj.getASJacPh2(R,P,initParams,leftSeg.kappa,leftSeg.L,leftSubSegIdx,lane_idx,'left');
-
-                            AS_resL(cntL) = anchored_res;
-
-                            % Warning sign for complex residual
-                            if ~isreal(anchored_res)
-                                warning(['Complex residual(Left) detected at state_idx: ',num2str(j),...
-                                         ', segment idx: ',num2str(leftSegIdx),...
-                                         ', sub-segment idx: ',num2str(leftSubSegIdx)])                                
-                            end
-
-                            idxL = 16*m+obj.opt.seg_tracker(leftSegIdx);
-                            idxkL = idxL + 3;
-                            idxlL = idxL + 3 + length(leftSeg.kappa);
-                            [I_rL,J_rL,V_rL] = sparseFormat(cntL,9*(j-1)+1:9*(j-1)+3,r_jac);
-                            [I_pL,J_pL,V_pL] = sparseFormat(cntL,9*(j-1)+7:9*(j-1)+9,p_jac);
-                            [I_PL,J_PL,V_PL] = sparseFormat(cntL,idxL+1:idxL+3,param_jac);
-                            [I_kL,J_kL,V_kL] = sparseFormat(cntL,idxkL+1:idxkL+leftSubSegIdx,kappa_jac);
-                            [I_lL,J_lL,V_lL] = sparseFormat(cntL,idxlL+1:idxlL+leftSubSegIdx,L_jac);
-                            
-                            I_L(jac_cntL+1:jac_cntL+9+2*leftSubSegIdx) = [I_rL, I_pL, I_PL, I_kL, I_lL];
-                            J_L(jac_cntL+1:jac_cntL+9+2*leftSubSegIdx) = [J_rL, J_pL, J_PL, J_kL, J_lL];
-                            V_L(jac_cntL+1:jac_cntL+9+2*leftSubSegIdx) = [V_rL, V_pL, V_PL, V_kL, V_lL];
-
-                            cntL = cntL + 1;
-                            jac_cntL = jac_cntL + 9 + 2 * leftSubSegIdx;
+                        if obj.phase == 1
+                            max_prev = 1;
+                        elseif obj.phase == 2
+                            max_prev = obj.lane.prev_num;
                         end
 
-                        if rightSubSegIdx > 0
-                            initParams = [rightSeg.x0, rightSeg.y0, rightSeg.tau0];
-                            [r_jac, p_jac, param_jac, kappa_jac, L_jac, anchored_res] = ...
-                            obj.getASJacPh2(R,P,initParams,rightSeg.kappa,rightSeg.L,rightSubSegIdx,lane_idx,'right');
-
-                            AS_resR(cntR) = anchored_res;
-
-                            % Warning sign for complex residual
-                            if ~isreal(anchored_res)
-                                warning(['Complex residual(Right) detected at state_idx: ',num2str(j),...
-                                         ', segment idx: ',num2str(rightSegIdx),...
-                                         ', sub-segment idx: ',num2str(rightSubSegIdx)])                                
+                        for k=1:max_prev                            
+                            leftSubSegIdx = obj.map.assocL(j,k);
+                            rightSubSegIdx = obj.map.assocR(j,k);
+    
+                            if leftSubSegIdx > 0
+                                initParams = [leftSeg.x0, leftSeg.y0, leftSeg.tau0];
+                                [r_jac, p_jac, param_jac, kappa_jac, L_jac, anchored_res] = ...
+                                obj.getASJac(R,P,initParams,leftSeg.kappa,leftSeg.L,leftSubSegIdx,lane_idx,k,'left');
+    
+                                AS_resL(cntL) = anchored_res;
+    
+                                % Warning sign for complex residual
+                                if ~isreal(anchored_res)
+                                    warning(['Complex residual(Left) detected at state_idx: ',num2str(j),...
+                                             ', segment idx: ',num2str(leftSegIdx),...
+                                             ', sub-segment idx: ',num2str(leftSubSegIdx)])                                
+                                end
+    
+                                idxL = 16*m+obj.opt.seg_tracker(leftSegIdx);
+                                idxkL = idxL + 3;
+                                idxlL = idxL + 3 + length(leftSeg.kappa);
+                                [I_rL,J_rL,V_rL] = sparseFormat(cntL,9*(j-1)+1:9*(j-1)+3,r_jac);
+                                [I_pL,J_pL,V_pL] = sparseFormat(cntL,9*(j-1)+7:9*(j-1)+9,p_jac);
+                                [I_PL,J_PL,V_PL] = sparseFormat(cntL,idxL+1:idxL+3,param_jac);
+                                [I_kL,J_kL,V_kL] = sparseFormat(cntL,idxkL+1:idxkL+leftSubSegIdx,kappa_jac);
+                                [I_lL,J_lL,V_lL] = sparseFormat(cntL,idxlL+1:idxlL+leftSubSegIdx,L_jac);
+                                
+                                I_L(jac_cntL+1:jac_cntL+9+2*leftSubSegIdx) = [I_rL, I_pL, I_PL, I_kL, I_lL];
+                                J_L(jac_cntL+1:jac_cntL+9+2*leftSubSegIdx) = [J_rL, J_pL, J_PL, J_kL, J_lL];
+                                V_L(jac_cntL+1:jac_cntL+9+2*leftSubSegIdx) = [V_rL, V_pL, V_PL, V_kL, V_lL];
+    
+                                cntL = cntL + 1;
+                                jac_cntL = jac_cntL + 9 + 2 * leftSubSegIdx;
                             end
-
-                            idxR = 16*m+obj.opt.seg_tracker(rightSegIdx);
-                            idxkR = idxR + 3;
-                            idxlR = idxR + 3 + length(rightSeg.kappa);
-                            [I_rR,J_rR,V_rR] = sparseFormat(cntR,9*(j-1)+1:9*(j-1)+3,r_jac);
-                            [I_pR,J_pR,V_pR] = sparseFormat(cntR,9*(j-1)+7:9*(j-1)+9,p_jac);
-                            [I_PR,J_PR,V_PR] = sparseFormat(cntR,idxR+1:idxR+3,param_jac);
-                            [I_kR,J_kR,V_kR] = sparseFormat(cntR,idxkR+1:idxkR+rightSubSegIdx,kappa_jac);
-                            [I_lR,J_lR,V_lR] = sparseFormat(cntR,idxlR+1:idxlR+rightSubSegIdx,L_jac);
-                            
-                            I_R(jac_cntR+1:jac_cntR+9+2*rightSubSegIdx) = [I_rR, I_pR, I_PR, I_kR, I_lR];
-                            J_R(jac_cntR+1:jac_cntR+9+2*rightSubSegIdx) = [J_rR, J_pR, J_PR, J_kR, J_lR];
-                            V_R(jac_cntR+1:jac_cntR+9+2*rightSubSegIdx) = [V_rR, V_pR, V_PR, V_kR, V_lR];
-
-                            cntR = cntR + 1;
-                            jac_cntR = jac_cntR + 9 + 2 * rightSubSegIdx;
+    
+                            if rightSubSegIdx > 0
+                                initParams = [rightSeg.x0, rightSeg.y0, rightSeg.tau0];
+                                [r_jac, p_jac, param_jac, kappa_jac, L_jac, anchored_res] = ...
+                                obj.getASJac(R,P,initParams,rightSeg.kappa,rightSeg.L,rightSubSegIdx,lane_idx,k,'right');
+    
+                                AS_resR(cntR) = anchored_res;
+    
+                                % Warning sign for complex residual
+                                if ~isreal(anchored_res)
+                                    warning(['Complex residual(Right) detected at state_idx: ',num2str(j),...
+                                             ', segment idx: ',num2str(rightSegIdx),...
+                                             ', sub-segment idx: ',num2str(rightSubSegIdx)])                                
+                                end
+    
+                                idxR = 16*m+obj.opt.seg_tracker(rightSegIdx);
+                                idxkR = idxR + 3;
+                                idxlR = idxR + 3 + length(rightSeg.kappa);
+                                [I_rR,J_rR,V_rR] = sparseFormat(cntR,9*(j-1)+1:9*(j-1)+3,r_jac);
+                                [I_pR,J_pR,V_pR] = sparseFormat(cntR,9*(j-1)+7:9*(j-1)+9,p_jac);
+                                [I_PR,J_PR,V_PR] = sparseFormat(cntR,idxR+1:idxR+3,param_jac);
+                                [I_kR,J_kR,V_kR] = sparseFormat(cntR,idxkR+1:idxkR+rightSubSegIdx,kappa_jac);
+                                [I_lR,J_lR,V_lR] = sparseFormat(cntR,idxlR+1:idxlR+rightSubSegIdx,L_jac);
+                                
+                                I_R(jac_cntR+1:jac_cntR+9+2*rightSubSegIdx) = [I_rR, I_pR, I_PR, I_kR, I_lR];
+                                J_R(jac_cntR+1:jac_cntR+9+2*rightSubSegIdx) = [J_rR, J_pR, J_PR, J_kR, J_lR];
+                                V_R(jac_cntR+1:jac_cntR+9+2*rightSubSegIdx) = [V_rR, V_pR, V_PR, V_kR, V_lR];
+    
+                                cntR = cntR + 1;
+                                jac_cntR = jac_cntR + 9 + 2 * rightSubSegIdx;
+                            end
                         end
                     end
                 end
@@ -1326,7 +1291,7 @@ classdef optimizer < handle
         end
 
         %% Arc Spline based Measurement 2 Residual and Jacobian Phase 2
-        function [AS2_res,AS2_jac] = CreateAS2BlockPh2(obj)
+        function [AS2_res,AS2_jac] = CreateAS2Block(obj)
             if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
                 AS2_res = []; AS2_jac = [];
             else
@@ -1350,7 +1315,7 @@ classdef optimizer < handle
                     initParams = [seg.x0, seg.y0, seg.tau0];
                     kappa = seg.kappa; L = seg.L;
                     [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = ...
-                    obj.getAS2JacPh2(R,P,initParams,kappa,L,lane_idx,dir,0);
+                    obj.getAS2Jac(R,P,initParams,kappa,L,lane_idx,dir,0);
 
                     AS2_resF(2*i-1:2*i) = anchored_res;
 
@@ -1379,7 +1344,7 @@ classdef optimizer < handle
                     initParams = [seg.x0, seg.y0, seg.tau0];
                     kappa = seg.kappa; L = seg.L;
                     [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = ...
-                    obj.getAS2JacPh2(R,P,initParams,kappa,L,lane_idx,dir,length(kappa));
+                    obj.getAS2Jac(R,P,initParams,kappa,L,lane_idx,dir,length(kappa));
 
                     AS2_resB(2*i-1:2*i) = anchored_res;
                     
@@ -1396,285 +1361,13 @@ classdef optimizer < handle
                     V_B = [V_B V_rB V_pB V_PB V_kB V_lB];
                 end
 
-                % For phase 2, step 1, additional model for every
-                % sub-segment should be considered.
-                I = []; J = []; V = [];
-%                 AS2_resR = [];
-%                 blk_heightR = 0;
-
-                
-                % Find bnds(i,2)'s state idx (except last point)
-                cnt = 1;
-                blk_heightR = 2 * sum(obj.map.subseg_cnt - 1);
-                AS2_resR = zeros(blk_heightR,1);
-
-                for i=1:n
-                    seg = obj.map.arc_segments{i};
-                    [r,c] = find(obj.map.segment_info == i);
-                    stateIntvs = obj.lane.FactorValidIntvs(c(1):c(end),1:2);
-                    
-                    for j=1:length(seg.stateIdxs)-1
-                        state_idx = seg.stateIdxs(j);
-                        for k=1:size(stateIntvs,1)
-                            if stateIntvs(k,1) <= state_idx && stateIntvs(k,2) >= state_idx
-                                row = r(k);
-                            end
-                        end
-
-                        if row == 1
-                            dir = 'left';
-                        elseif row == 2
-                            dir = 'right';
-                        end
-
-                        R = obj.states{state_idx}.R; P = obj.states{state_idx}.P;
-                        lane_idx = obj.lane.state_idxs(state_idx);
-
-                        initParams = [seg.x0, seg.y0, seg.tau0];
-                        kappa = seg.kappa; L = seg.L;
-                        [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = ...
-                        obj.getAS2JacPh2(R,P,initParams,kappa,L,lane_idx,dir,j);
-                        
-                        AS2_resR(2*cnt-1:2*cnt) = anchored_res;
-
-                        idx = 16 * m + obj.opt.seg_tracker(i);
-                        idxk = idx + 3;
-                        idxl = idx + 3 + length(kappa);
-                        [I_r,J_r,V_r] = sparseFormat(2*cnt-1:2*cnt,9*(state_idx-1)+1:9*(state_idx-1)+3,r_jac);
-                        [I_p,J_p,V_p] = sparseFormat(2*cnt-1:2*cnt,9*(state_idx-1)+7:9*(state_idx-1)+9,p_jac);
-                        [I_P,J_P,V_P] = sparseFormat(2*cnt-1:2*cnt,idx+1:idx+3,param_jac);
-                        [I_k,J_k,V_k] = sparseFormat(2*cnt-1:2*cnt,idxk+1:idxk+length(kappa),kappa_jac);
-                        [I_l,J_l,V_l] = sparseFormat(2*cnt-1:2*cnt,idxl+1:idxl+length(L),L_jac);
-
-                        I = [I I_r I_p I_P I_k I_l];
-                        J = [J J_r J_p J_P J_k J_l];
-                        V = [V V_r V_p V_P V_k V_l];
-                        cnt = cnt + 1;
-                    end
-                end
-                
-
-                AS2_res = vertcat(AS2_resF,AS2_resB,AS2_resR);
+                AS2_res = vertcat(AS2_resF,AS2_resB);
                 AS2_jacF = sparse(I_F,J_F,V_F,blk_height,blk_width);
                 AS2_jacB = sparse(I_B,J_B,V_B,blk_height,blk_width);
-                AS2_jacR = sparse(I,J,V,blk_heightR,blk_width);
-                AS2_jac = vertcat(AS2_jacF,AS2_jacB,AS2_jacR);
+                AS2_jac = vertcat(AS2_jacF,AS2_jacB);
 
                 obj.opt.AS2_jac = AS2_jac;
                 obj.opt.AS2_res = AS2_res;
-            end
-        end
-
-        %% Arc Spline based Measurement Residual and Jacobian Phase 3
-        function [AS_res,AS_jac] = CreateASBlockPh3(obj)    
-            % Version 2: Arc Spline based model, Phase 3
-            % Point-PointMap matching is very inefficient and has
-            % association problems. Therefore all lanes are re-defined as
-            % combination of arc splines. This way, number of variables are
-            % reduced significantly. 
-            % Original Measurement Model: ~1M measurement and ~90k
-            % additional variables
-            % Current Measurement Model: ~60k measurment and ~130 
-            % additional variables
-           
-            if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
-                AS_res = []; AS_jac = [];
-            else
-                % Due to the complexity of computing jacobian of
-                % measurement function algebraically, numerical jacobian
-                % computation is implemented for this block
-                % For computation speed, forward-difference is adopted
-                n = size(obj.lane.FactorValidIntvs,1);
-                m = length(obj.states);
-
-                blk_heightL = nnz(obj.map.assocL);
-                blk_heightR = nnz(obj.map.assocR);
-                AS_resL = zeros(blk_heightL,1);
-                AS_resR = zeros(blk_heightR,1);
-                subsegcolIdxs = [1 1 + cumsum(3 + 2*obj.map.subseg_cnt(1:end-1))]; % Each segment's column starting index
-                cumSum = cumsum(3 + 2*obj.map.subseg_cnt);
-                blk_width = 16 * m + cumSum(end);
-
-                I_L = zeros(9*blk_heightL + 2 * sum(obj.map.assocL,'all'),1);
-                J_L = I_L; V_L = I_L;
-
-                I_R = zeros(9*blk_heightR + 2 * sum(obj.map.assocR,'all'),1);
-                J_R = I_R; V_R = I_R;
-
-                cntL = 1; cntR = 1;
-                cntJacL = 0; cntJacR = 0; 
-                
-                for i=1:n
-                    lb = obj.lane.FactorValidIntvs(i,1);
-                    ub = obj.lane.FactorValidIntvs(i,2);
-                    leftSegIdx = obj.map.segment_info(1,i);
-                    rightSegIdx = obj.map.segment_info(2,i);
-                    
-                    leftSeg = obj.map.arc_segments{leftSegIdx};
-                    rightSeg = obj.map.arc_segments{rightSegIdx};
-
-                    for j=lb:ub
-                        
-                        R = obj.states{j}.R;
-                        P = obj.states{j}.P;
-                        lane_idx = obj.lane.state_idxs(j);
-
-                        for k=1:obj.lane.prev_num
-                            subSegIdxL = obj.map.assocL(j,k);
-                            subSegIdxR = obj.map.assocR(j,k);
-                            
-                            % Left 
-                            if subSegIdxL > 0 % Valid Measurement                                
-                                initParams = [leftSeg.x0, leftSeg.y0, leftSeg.tau0];
-                                Params = [leftSeg.kappa; leftSeg.L];
-                                                              
-                                [r_jac,p_jac,param_jac,anchored_res] = obj.getASJacPh3(R,P,initParams,Params,subSegIdxL,lane_idx,k,'left');
-                                % Output jacobians are already normalized
-                                
-                                % Residual
-                                AS_resL(cntL) = anchored_res;
-                                
-                                % Jacobian
-                                [I_rL,J_rL,V_rL] = sparseFormat(cntL,9*(j-1)+1:9*(j-1)+3,r_jac);
-                                [I_pL,J_pL,V_pL] = sparseFormat(cntL,9*(j-1)+7:9*(j-1)+9,p_jac);
-                                segIdxL = subsegcolIdxs(leftSegIdx);
-                                num = 3+2*obj.map.subseg_cnt(leftSegIdx)-1;
-                                % Jacobian for one full segment
-                                [I_PL,J_PL,V_PL] = sparseFormat(cntL,16*m+segIdxL:16*m+segIdxL+num,param_jac);
-                                
-                                I_L(cntJacL+1:cntJacL+9+2*obj.map.subseg_cnt(leftSegIdx)) = [I_rL I_pL I_PL];
-                                J_L(cntJacL+1:cntJacL+9+2*obj.map.subseg_cnt(leftSegIdx)) = [J_rL J_pL J_PL];
-                                V_L(cntJacL+1:cntJacL+9+2*obj.map.subseg_cnt(leftSegIdx)) = [V_rL V_pL V_PL];
-
-                                cntL = cntL + 1;
-                                cntJacL = cntJacL + 9+2*obj.map.subseg_cnt(leftSegIdx);
-                            end
-
-                            % Right
-                            if subSegIdxR > 0 % Valid Measurement
-                                initParams = [rightSeg.x0, rightSeg.y0, rightSeg.tau0];
-                                Params = [rightSeg.kappa; rightSeg.L];                                
-                                
-                                [r_jac,p_jac,param_jac,anchored_res] = obj.getASJacPh3(R,P,initParams,Params,subSegIdxR,lane_idx,k,'right');
-                                % Output jacobians are already normalized
-                                
-                                % Residual
-                                AS_resR(cntR) = anchored_res;
-                                
-                                % Jacobian
-                                [I_rR,J_rR,V_rR] = sparseFormat(cntR,9*(j-1)+1:9*(j-1)+3,r_jac);
-                                [I_pR,J_pR,V_pR] = sparseFormat(cntR,9*(j-1)+7:9*(j-1)+9,p_jac);
-                                segIdxR = subsegcolIdxs(rightSegIdx);
-                                num = 3+2*obj.map.subseg_cnt(rightSegIdx)-1;
-                                % Jacobian for one full segment
-                                [I_PR,J_PR,V_PR] = sparseFormat(cntR,16*m+segIdxR:16*m+segIdxR+num,param_jac);
-                                
-                                I_R(cntJacR+1:cntJacR+9+2*obj.map.subseg_cnt(rightSegIdx)) = [I_rR I_pR I_PR];
-                                J_R(cntJacR+1:cntJacR+9+2*obj.map.subseg_cnt(rightSegIdx)) = [J_rR J_pR J_PR];
-                                V_R(cntJacR+1:cntJacR+9+2*obj.map.subseg_cnt(rightSegIdx)) = [V_rR V_pR V_PR];
-
-                                cntR = cntR + 1;
-                                cntJacR = cntJacR + 9+2*obj.map.subseg_cnt(rightSegIdx);
-                            end
-                        end
-                    end                    
-                end
-
-                AS_jacL = sparse(I_L,J_L,V_L,blk_heightL,blk_width);
-                AS_jacR = sparse(I_R,J_R,V_R,blk_heightR,blk_width);
-
-                AS_res = vertcat(AS_resL,AS_resR);
-                AS_jac = vertcat(AS_jacL,AS_jacR);
-                
-%                 error(1);
-                
-            end
-        end
-
-        %% Arc Spline based Measurement 2 Residual and Jacobian Phase 3
-        function [AS2_res,AS2_jac] = CreateAS2BlockPh3(obj)
-            % Additional Measurement model to anchor initial and final 
-            % point in each large segment
-            if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
-                AS2_res = []; AS2_jac = [];
-            else
-                n = length(obj.map.arc_segments);
-                m = length(obj.states);
-                blk_height = 2 * n;
-                blk_width = length(obj.opt.x0);
-                AS2_resF = zeros(blk_height,1);
-                AS2_resI = zeros(blk_height,1);
-                I_F = []; I_I = [];
-                J_F = []; J_I = [];
-                V_F = []; V_I = [];
-
-                subsegcolIdxs = [1 1 + cumsum(3 + 2*obj.map.subseg_cnt(1:end-1))];
-
-                for i=1:n                    
-                    % Final
-                    [intvIdx,dir] = obj.maxColIdx(obj.map.segment_info,i);
-                    state_idx = obj.lane.FactorValidIntvs(intvIdx,2);
-                    state = obj.states{state_idx};
-                    R = state.R; P = state.P;
-                    lane_idx = obj.lane.state_idxs(state_idx);
-                    
-                    seg = obj.map.arc_segments{i};
-                    initParams = [seg.x0, seg.y0, seg.tau0];
-                    Params = [seg.kappa; seg.L];
-                    if strcmp(dir,'left')
-                        [r_jac,p_jac,param_jac,anchored_res] = obj.getAS2JacPh3(R,P,initParams,Params,lane_idx,'left','last');
-                    elseif strcmp(dir,'right')
-                        [r_jac,p_jac,param_jac,anchored_res] = obj.getAS2JacPh3(R,P,initParams,Params,lane_idx,'right','last');
-                    end
-
-                    % Residual
-                    AS2_resF(2*i-1:2*i) = anchored_res;
-                    
-                    [I_rF,J_rF,V_rF] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+1:9*(state_idx-1)+3,r_jac);
-                    [I_pF,J_pF,V_pF] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+7:9*(state_idx-1)+9,p_jac);
-                
-                    segIdx = subsegcolIdxs(i);
-                    num = 3+2*obj.map.subseg_cnt(i)-1;
-
-                    [I_PF,J_PF,V_PF] = sparseFormat(2*i-1:2*i,16*m+segIdx:16*m+segIdx+num,param_jac);
-                    
-                    % Init
-                    [intvIdx,dir] = obj.minColIdx(obj.map.segment_info,i);
-                    state_idx = obj.lane.FactorValidIntvs(intvIdx,1);
-                    state = obj.states{state_idx};
-                    R = state.R; P = state.P;
-                    lane_idx = obj.lane.state_idxs(state_idx);
-
-                    if strcmp(dir,'left')
-                        [r_jac,p_jac,param_jac,anchored_res] = obj.getAS2JacPh3(R,P,initParams,Params,lane_idx,'left','init');
-                    elseif strcmp(dir,'right')
-                        [r_jac,p_jac,param_jac,anchored_res] = obj.getAS2JacPh3(R,P,initParams,Params,lane_idx,'right','init');
-                    end
-                    
-                    % Residual
-                    AS2_resI(2*i-1:2*i) = anchored_res;
-                    
-                    [I_rI,J_rI,V_rI] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+1:9*(state_idx-1)+3,r_jac);
-                    [I_pI,J_pI,V_pI] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+7:9*(state_idx-1)+9,p_jac);
-                
-                    segIdx = subsegcolIdxs(i);
-                    num = 3+2*obj.map.subseg_cnt(i)-1;
-
-                    [I_PI,J_PI,V_PI] = sparseFormat(2*i-1:2*i,16*m+segIdx:16*m+segIdx+num,param_jac);
-
-                    I_F = [I_F I_rF I_pF I_PF];
-                    I_I = [I_I I_rI I_pI I_PI];
-                    J_F = [J_F J_rF J_pF J_PF];
-                    J_I = [J_I J_rI J_pI J_PI];
-                    V_F = [V_F V_rF V_pF V_PF];
-                    V_I = [V_I V_rI V_pI V_PI];
-                end
-                AS2_res = vertcat(AS2_resI,AS2_resF);
-                AS2_jacF = sparse(I_F,J_F,V_F,blk_height,blk_width);
-                AS2_jacI = sparse(I_I,J_I,V_I,blk_height,blk_width);
-                AS2_jac = vertcat(AS2_jacI,AS2_jacF);
-                obj.opt.AS2_res = AS2_res;
-%                 error(1);
             end
         end
 
@@ -1820,17 +1513,17 @@ classdef optimizer < handle
         end
         
         %% Arc Spline based Numerical Jacobian Computation Phase 2
-        function [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = getASJacPh2(obj,R,P,initParams,kappa,L,SubSegIdx,lane_idx,dir)
+        function [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = getASJac(obj,R,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir)
             eps = 1e-8;
-            anchored_res = obj.getASResPh2(R,P,initParams,kappa,L,SubSegIdx,lane_idx,dir);
+            anchored_res = obj.getASRes(R,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
             
             r_jac = zeros(1,3); p_jac = zeros(1,3); 
             param_jac = zeros(1,3); kappa_jac = zeros(1,SubSegIdx);
             L_jac = zeros(1,SubSegIdx);
             if strcmp(dir,'left')
-                cov = obj.lane.lystd(lane_idx,1)^2;
+                cov = obj.lane.lystd(lane_idx,k)^2;
             elseif strcmp(dir,'right')
-                cov = obj.lane.rystd(lane_idx,1)^2;
+                cov = obj.lane.rystd(lane_idx,k)^2;
             end
             
             % Add perturbation to all variables of
@@ -1843,7 +1536,7 @@ classdef optimizer < handle
                 rot_ptb_vec(i) = eps;
                 R_ptb = R * Exp_map(rot_ptb_vec); 
 
-                res_ptb = obj.getASResPh2(R_ptb,P,initParams,kappa,L,SubSegIdx,lane_idx,dir);
+                res_ptb = obj.getASRes(R_ptb,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
                 r_jac(i) = (res_ptb - anchored_res)/eps;
             end
             r_jac = InvMahalanobis(r_jac,cov);
@@ -1855,7 +1548,7 @@ classdef optimizer < handle
                 pos_ptb_vec(i) = eps;
                 P_ptb = P + R * pos_ptb_vec;
 
-                res_ptb = obj.getASResPh2(R,P_ptb,initParams,kappa,L,SubSegIdx,lane_idx,dir);
+                res_ptb = obj.getASRes(R,P_ptb,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
                 p_jac(i) = (res_ptb - anchored_res)/eps;
             end
             p_jac = InvMahalanobis(p_jac,cov);
@@ -1866,7 +1559,7 @@ classdef optimizer < handle
                 initParams_ptb_vec(i) = eps;
                 initParams_ptb = initParams + initParams_ptb_vec;
 
-                res_ptb = obj.getASResPh2(R,P,initParams_ptb,kappa,L,SubSegIdx,lane_idx,dir);
+                res_ptb = obj.getASRes(R,P,initParams_ptb,kappa,L,SubSegIdx,lane_idx,k,dir);
                 param_jac(i) = (res_ptb - anchored_res)/eps;
             end
             param_jac = InvMahalanobis(param_jac,cov);
@@ -1879,7 +1572,7 @@ classdef optimizer < handle
                 kappa_ptb_vec(i) = eps;
                 kappa_ptb = kappa + kappa_ptb_vec;
 
-                res_ptb = obj.getASResPh2(R,P,initParams,kappa_ptb,L,SubSegIdx,lane_idx,dir);
+                res_ptb = obj.getASRes(R,P,initParams,kappa_ptb,L,SubSegIdx,lane_idx,k,dir);
                 kappa_jac(i) = (res_ptb - anchored_res)/eps;
             end
             kappa_jac = InvMahalanobis(kappa_jac,cov);
@@ -1893,7 +1586,7 @@ classdef optimizer < handle
                 % actual optimization variable is sqrt(L)
                 L_ptb = (L.^(1/2) + L_ptb_vec).^2;
 
-                res_ptb = obj.getASResPh2(R,P,initParams,kappa,L_ptb,SubSegIdx,lane_idx,dir);
+                res_ptb = obj.getASRes(R,P,initParams,kappa,L_ptb,SubSegIdx,lane_idx,k,dir);
                 L_jac(i) = (res_ptb - anchored_res)/eps;
             end
             L_jac = InvMahalanobis(L_jac,cov);
@@ -1902,14 +1595,14 @@ classdef optimizer < handle
         end
         
         %% Arc Spline based measurement residual Phase 2
-        function res = getASResPh2(obj,R,P,initParams,kappa,L,SubSegIdx,lane_idx,dir)
+        function res = getASRes(obj,R,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir)
             rpy = dcm2rpy(R); psi = rpy(3);
             R2d = [cos(psi) -sin(psi);
                    sin(psi) cos(psi)];
             if strcmp(dir,'left')
-                dij = obj.lane.ly(lane_idx,1);
+                dij = obj.lane.ly(lane_idx,k);
             elseif strcmp(dir,'right')
-                dij = obj.lane.ry(lane_idx,1);
+                dij = obj.lane.ry(lane_idx,k);
             end
             % Propgate arc center point until the matched sub-segment 
             x0 = initParams(1); y0 = initParams(2); heading = initParams(3);
@@ -1923,8 +1616,9 @@ classdef optimizer < handle
                 end
                 heading = heading + kappa(i) * L(i);
             end
-            
-            Xc_b = R2d' * (Xc - P(1:2)); xc_b = Xc_b(1); yc_b = Xc_b(2);
+            Pp = P + R * [10*(k-1);0;0];
+
+            Xc_b = R2d' * (Xc - Pp(1:2)); xc_b = Xc_b(1); yc_b = Xc_b(2);
             kappa_ = kappa(SubSegIdx);
 
             % WARNING! Need to double check if this logic is appropriate
@@ -1938,9 +1632,9 @@ classdef optimizer < handle
         end
 
         %% Arc Spline based Numerical Jacobian Computation 2 Phase 2
-        function [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = getAS2JacPh2(obj,R,P,initParams,kappa,L,lane_idx,dir,SubSegIdx)
+        function [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = getAS2Jac(obj,R,P,initParams,kappa,L,lane_idx,dir,SubSegIdx)
             eps = 1e-6;
-            anchored_res = obj.getAS2ResPh2(R,P,initParams,kappa,L,lane_idx,dir,SubSegIdx);
+            anchored_res = obj.getAS2Res(R,P,initParams,kappa,L,lane_idx,dir,SubSegIdx);
             
             r_jac = zeros(2,3); p_jac = zeros(2,3); 
             param_jac = zeros(2,3);
@@ -1962,7 +1656,7 @@ classdef optimizer < handle
                 rot_ptb_vec(i) = eps;
                 R_ptb = R * Exp_map(rot_ptb_vec); 
 
-                res_ptb = obj.getAS2ResPh2(R_ptb,P,initParams,kappa,L,lane_idx,dir,SubSegIdx);
+                res_ptb = obj.getAS2Res(R_ptb,P,initParams,kappa,L,lane_idx,dir,SubSegIdx);
                 r_jac(:,i) = (res_ptb - anchored_res)/eps;
             end
             r_jac = InvMahalanobis(r_jac,cov);
@@ -1974,7 +1668,7 @@ classdef optimizer < handle
                 pos_ptb_vec(i) = eps;
                 P_ptb = P + R * pos_ptb_vec;
 
-                res_ptb = obj.getAS2ResPh2(R,P_ptb,initParams,kappa,L,lane_idx,dir,SubSegIdx);
+                res_ptb = obj.getAS2Res(R,P_ptb,initParams,kappa,L,lane_idx,dir,SubSegIdx);
                 p_jac(:,i) = (res_ptb - anchored_res)/eps;
             end
             p_jac = InvMahalanobis(p_jac,cov);
@@ -1985,7 +1679,7 @@ classdef optimizer < handle
                 initParams_ptb_vec(i) = eps;
                 initParams_ptb = initParams + initParams_ptb_vec;
 
-                res_ptb = obj.getAS2ResPh2(R,P,initParams_ptb,kappa,L,lane_idx,dir,SubSegIdx);
+                res_ptb = obj.getAS2Res(R,P,initParams_ptb,kappa,L,lane_idx,dir,SubSegIdx);
                 param_jac(:,i) = (res_ptb - anchored_res)/eps;
             end
             param_jac = InvMahalanobis(param_jac,cov);
@@ -1996,7 +1690,7 @@ classdef optimizer < handle
                 kappa_ptb_vec(i) = eps;
                 kappa_ptb = kappa + kappa_ptb_vec;
 
-                res_ptb = obj.getAS2ResPh2(R,P,initParams,kappa_ptb,L,lane_idx,dir,SubSegIdx);
+                res_ptb = obj.getAS2Res(R,P,initParams,kappa_ptb,L,lane_idx,dir,SubSegIdx);
                 kappa_jac(:,i) = (res_ptb - anchored_res)/eps;
             end
             kappa_jac = InvMahalanobis(kappa_jac,cov);
@@ -2009,7 +1703,7 @@ classdef optimizer < handle
                 % actual optimization variable is sqrt(L)
                 L_ptb = (L.^(1/2) + L_ptb_vec).^2;
 
-                res_ptb = obj.getAS2ResPh2(R,P,initParams,kappa,L_ptb,lane_idx,dir,SubSegIdx);
+                res_ptb = obj.getAS2Res(R,P,initParams,kappa,L_ptb,lane_idx,dir,SubSegIdx);
                 L_jac(:,i) = (res_ptb - anchored_res)/eps;
             end
             L_jac = InvMahalanobis(L_jac,cov);
@@ -2018,7 +1712,7 @@ classdef optimizer < handle
         end
         
         %% Arc Spline based measurement 2 residual Phase 2
-        function res = getAS2ResPh2(obj,R,P,initParams,kappa,L,lane_idx,dir,SubSegIdx)
+        function res = getAS2Res(obj,R,P,initParams,kappa,L,lane_idx,dir,SubSegIdx)
             rpy = dcm2rpy(R); psi = rpy(3);
             R2d = [cos(psi) -sin(psi);
                    sin(psi) cos(psi)];
@@ -2041,228 +1735,6 @@ classdef optimizer < handle
             end
             % xb should be 0 (ideal)
             res = [xb;yb - dij];      
-        end
-
-        %% Arc Spline based Numerical Jacobian Computation Phase 3
-        function [r_jac,p_jac,param_jac,anchored_res] = getASJacPh3(obj,R,P,initParams,Params,subSegIdx,lane_idx,k,dir)
-            % Returns normalized jacobian and residual
-            % Jacobian is computed numerically
-            % param_jac is jacobian for the segment of interest, not the
-            % total parameter jacobian
-
-            eps = 1e-8; % Numerical Jacobian step size
-            anchored_res = obj.getASResPh3(R,P,initParams,Params,subSegIdx,lane_idx,k,dir);
-
-            r_jac = zeros(1,3); p_jac = zeros(1,3); 
-            param_jac = zeros(1,3+numel(Params));
-            if strcmp(dir,'left')
-                cov = obj.lane.lystd(lane_idx,k)^2;
-            else
-                cov = obj.lane.rystd(lane_idx,k)^2;
-            end
-            
-            % Add perturbation to all variables of
-            % interest to find jacobian
-
-            % 1: Perturbation to Rotational Matrix
-
-            for i=1:3
-                rot_ptb_vec = zeros(3,1);
-                rot_ptb_vec(i) = eps;
-                R_ptb = R * Exp_map(rot_ptb_vec); 
-
-                res_ptb = obj.getASResPh3(R_ptb,P,initParams,Params,subSegIdx,lane_idx,k,dir);
-                r_jac(i) = (res_ptb - anchored_res)/eps;
-            end
-            r_jac = InvMahalanobis(r_jac,cov);
-
-            % 2: Perturbation to Position
-            
-            for i=1:3
-                pos_ptb_vec = zeros(3,1);
-                pos_ptb_vec(i) = eps;
-                P_ptb = P + R * pos_ptb_vec;
-
-                res_ptb = obj.getASResPh3(R,P_ptb,initParams,Params,subSegIdx,lane_idx,k,dir);
-                p_jac(i) = (res_ptb - anchored_res)/eps;
-            end
-            p_jac = InvMahalanobis(p_jac,cov);
-
-            % 3: Perturbation to Segment initParams
-            for i=1:3
-                initParams_ptb_vec = zeros(1,3);
-                initParams_ptb_vec(i) = eps;
-                initParams_ptb = initParams + initParams_ptb_vec;
-
-                res_ptb = obj.getASResPh3(R,P,initParams_ptb,Params,subSegIdx,lane_idx,k,dir);
-                param_jac(i) = (res_ptb - anchored_res)/eps;
-            end
-
-            % 4: Perturbation to Sub-Segment Params
-            for j=1:subSegIdx
-                % For sub-segment parameter perturbation, variables "after"
-                % the target sub-segment index are not used!
-                
-                for i=1:2
-                    Params_ptb_vec = zeros(size(Params));
-                    Params_ptb_vec(i,j) = eps;
-                    Params_ptb = Params + Params_ptb_vec;
-
-                    res_ptb = obj.getASResPh3(R,P,initParams,Params_ptb,subSegIdx,lane_idx,k,dir);
-                    param_jac(3+2*(j-1)+i) = (res_ptb - anchored_res)/eps;
-                end
-            end
-            param_jac = InvMahalanobis(param_jac,cov);
-            
-            anchored_res = InvMahalanobis(anchored_res,cov);
-        end
-
-        %% Arc Spline based measurement residual Phase 3
-        function res = getASResPh3(obj,Ri,Pi,initParams,Params,subSegIdx,lane_idx,k,dir)
-            % Computing residual for given current state/arc parameter
-            % variables
-            % * This function can further be optimized by propagating 
-            % center point of circle only when arc parameters are changed
-            % by perturbation
-            % Currently, optimizing function flow is not predicted to
-            % speed up the code substantially. If jacobian computation is 
-            % too slow, try modifying this part.
-            
-            rpy = dcm2rpy(Ri); psi = rpy(3);
-            R2d = [cos(psi) -sin(psi);
-                   sin(psi) cos(psi)];
-
-            % Propgate arc center point until the matched sub-segment 
-            x0 = initParams(1); y0 = initParams(2); tau0 = initParams(3);
-            kappas = Params(1,:); Ls = Params(2,:);
-            heading = tau0;
-            for i=1:subSegIdx
-                if i == 1
-                    Xc = [x0 - 1/kappas(i) * sin(heading);
-                          y0 + 1/kappas(i) * cos(heading)];
-                else
-                    Xc = Xc + (1/kappas(i-1) - 1/kappas(i)) * [sin(heading);
-                                                               -cos(heading)];
-                end
-                heading = heading + kappas(i) * Ls(i);
-            end
-            
-            Xc_b = R2d' * (Xc - Pi(1:2)); xc_b = Xc_b(1); yc_b = Xc_b(2);
-            kappa = kappas(subSegIdx);
-            
-            if strcmp(dir,'left')
-                dij = obj.lane.ly(lane_idx,k);
-            elseif strcmp(dir,'right')
-                dij = obj.lane.ry(lane_idx,k);
-            end
-
-            % WARNING! Need to double check if this logic is appropriate
-            % Computing "distance" residual
-            if kappa > 0
-                res = yc_b - sqrt((1/kappa)^2 - xc_b^2) - dij;
-            else
-                res = yc_b + sqrt((1/kappa)^2 - xc_b^2) - dij;
-            end
-        end
-
-        %% Arc Spline based Numerical Jacobian Computation 2 Phase 3
-        function [r_jac,p_jac,param_jac,anchored_res] = getAS2JacPh3(obj,R,P,initParams,Params,lane_idx,dir,flag)
-            eps = 1e-8;
-            anchored_res = obj.getAS2ResPh3(R,P,initParams,Params,lane_idx,dir,flag);
-            
-            r_jac = zeros(2,3); p_jac = zeros(2,3); 
-            param_jac = zeros(2,3+numel(Params));
-            if strcmp(dir,'left')
-                cov = diag([0.01^2, obj.lane.lystd(lane_idx,1)^2]);
-            elseif strcmp(dir,'right')
-                cov = diag([0.01^2, obj.lane.rystd(lane_idx,1)^2]);
-            end
-            
-            % Add perturbation to all variables of
-            % interest to find jacobian
-
-            % 1: Perturbation to Rotational Matrix
-
-            for i=1:3
-                rot_ptb_vec = zeros(3,1);
-                rot_ptb_vec(i) = eps;
-                R_ptb = R * Exp_map(rot_ptb_vec); 
-
-                res_ptb = obj.getAS2ResPh3(R_ptb,P,initParams,Params,lane_idx,dir,flag);
-                r_jac(:,i) = (res_ptb - anchored_res)/eps;
-            end
-            r_jac = InvMahalanobis(r_jac,cov);
-
-            % 2: Perturbation to Position
-            
-            for i=1:3
-                pos_ptb_vec = zeros(3,1);
-                pos_ptb_vec(i) = eps;
-                P_ptb = P + R * pos_ptb_vec;
-
-                res_ptb = obj.getAS2ResPh3(R,P_ptb,initParams,Params,lane_idx,dir,flag);
-                p_jac(:,i) = (res_ptb - anchored_res)/eps;
-            end
-            p_jac = InvMahalanobis(p_jac,cov);
-
-            % 3: Perturbation to Segment initParams
-            for i=1:3
-                initParams_ptb_vec = zeros(1,3);
-                initParams_ptb_vec(i) = eps;
-                initParams_ptb = initParams + initParams_ptb_vec;
-
-                res_ptb = obj.getAS2ResPh3(R,P,initParams_ptb,Params,lane_idx,dir,flag);
-                param_jac(:,i) = (res_ptb - anchored_res)/eps;
-            end
-
-            % 4: Perturbation to Sub-Segment Params
-            for j=1:size(Params,2)
-                % For sub-segment parameter perturbation, variables "after"
-                % the target sub-segment index are not used!
-                
-                for i=1:2
-                    Params_ptb_vec = zeros(size(Params));
-                    Params_ptb_vec(i,j) = eps;
-                    Params_ptb = Params + Params_ptb_vec;
-
-                    res_ptb = obj.getAS2ResPh3(R,P,initParams,Params_ptb,lane_idx,dir,flag);
-                    param_jac(:,3+2*(j-1)+i) = (res_ptb - anchored_res)/eps;
-                end
-            end
-            param_jac = InvMahalanobis(param_jac,cov);
-            
-            anchored_res = InvMahalanobis(anchored_res,cov);
-        end
-
-        %% Arc Spline based measurement 2 residual Phase 3
-        function res = getAS2ResPh3(obj,R,P,initParams,Params,lane_idx,dir,flag)
-            % Computing residual for given segment's last point
-            rpy = dcm2rpy(R); psi = rpy(3);
-            R2d = [cos(psi) -sin(psi);
-                   sin(psi) cos(psi)];
-
-            % Propgate arc node point until the last sub-segment
-            x = initParams(1); y = initParams(2); heading = initParams(3);
-            kappas = Params(1,:); Ls = Params(2,:);            
-            
-            if strcmp(flag,'last')
-                for i=1:length(kappas)
-                    x = x + 1/kappas(i) * (sin(heading + kappas(i) * Ls(i)) - sin(heading));
-                    y = y - 1/kappas(i) * (cos(heading + kappas(i) * Ls(i)) - cos(heading));
-                    heading = heading + kappas(i) * Ls(i);
-                end
-            end
-            X = [x;y];
-            Xb = R2d' * (X - P(1:2)); xb = Xb(1); yb = Xb(2);
-
-            if strcmp(dir,'left')
-                dij = obj.lane.ly(lane_idx,1);
-            elseif strcmp(dir,'right')
-                dij = obj.lane.ry(lane_idx,1);
-            end
-            % xb should be 0 (ideal)
-            res = [xb;yb - dij];      
-            
         end
         
         %% Update segment tracker
@@ -2375,23 +1847,6 @@ classdef optimizer < handle
         
             Jbg = -1/Si * skew(L);
             Js = -1/Si^2 * (Ri' * Vi - skew(wi - bgi - bgdi) * L);
-        %     Jl = -1/Si * skew(wi - bgi - bgdi);
-        %     Jl = Jl(:,1); % Only take the longitudinal lever arm as the optimization variable
-        end
-        
-        %% Lane Measurement Jacobian -- Deprecated
-        function [Jri,Jpi,JLij,JLijp1,Jrip1,Jpip1,JLip1j] = getMEJac(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,j)
-            A = Ri' * (Pip1 + Rip1 * Lip1j - Pi);
-            B = eye(3) + 1/10 * [Lij - Lijp1 zeros(3,2)];
-            K = [1/10, 0, 0];
-        
-            Jri = skew(A) * B;
-            Jpi = -B;
-            JLij = eye(3) * (K * A - j);
-            JLijp1= eye(3) * (j-1 - K * A);
-            Jrip1 = -Ri' * Rip1 * skew(Lip1j) * B;
-            Jpip1 = Ri' * Rip1 * B;
-            JLip1j = Jpip1;
         end
         
         %% Compute Dog-Leg Step for Approximate Trust Region Method

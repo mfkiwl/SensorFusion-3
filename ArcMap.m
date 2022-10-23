@@ -28,18 +28,28 @@ classdef ArcMap < handle
             obj.states = states;
             obj.lane = lane;
             obj.lane_prob_thres = lane_prob_thres;
-            
+            obj.assocL = zeros(length(obj.states),obj.lane.prev_num);
+            obj.assocR = obj.assocL;
+
             % Initial Segment Classification
             obj.InitSegmentClassification();
             
             % Initial Segment Parametrization
             obj.InitSegmentParametrization();
 
-            % Data Association
-            obj.DataAssociation0();% --> initial data association is done using init segmentation information
+            % Perform Arc Spline based lane fitting with initial
+            % parametrization data
+            for i=1:length(obj.arc_segments)
+                fit = ArcFit(obj.arc_segments{i},obj.segments{i});                
+                % retrieve params after optimization for each segment
+                obj.arc_segments{i} = fit.getParams();
+            end
+
+            % Perform data association
+            obj.DataAssociation();
         end
         
-        %% Map Update
+        %% Map Update for 
         function obj = update(obj,states,arc_delta_params)
             % Update variables after iterative optimization step
             % Input variable format
@@ -65,7 +75,8 @@ classdef ArcMap < handle
             % Perform data association with updated variables
             % Update data association for remaining preview distance 
             % measurements iteratively
-            obj.DataAssociationRem();     
+            obj.DataAssociation(); 
+            
             % change if this is too unstable!
         end
 
@@ -132,9 +143,9 @@ classdef ArcMap < handle
                 obj.max_err = [obj.max_err {zeros(1,length(obj.arc_segments{i}.kappa))}];
             end
             
-            if phase == 2
+            if phase == 1
                 prev_max = 1;
-            elseif phase == 3
+            elseif phase == 2
                 prev_max = obj.lane.prev_num;
             end
 
@@ -189,9 +200,10 @@ classdef ArcMap < handle
                 obj.summary();
             end
             disp('=========================================================')
-
+            
+            % Perform Data Association for next optimization 
             obj.DataAssociation0();
-            obj.DataAssociationRem();
+            obj.DataAssociation();
         end
        
     end
@@ -272,22 +284,7 @@ classdef ArcMap < handle
                     initParams.bnds = [initParams.bnds; initSegments{j}.bnds];
                     initParams.kappa = [initParams.kappa initSegments{j}.kappa];
                     initParams.L = [initParams.L initSegments{j}.L];
-%                     if j == 1
-%                         initParams.xc = initParams.x0 - 1/initParams.kappa(end) * sin(heading);
-%                         initParams.yc = initParams.y0 + 1/initParams.kappa(end) * cos(heading);
-%                     else
-%                         initParams.xc = [initParams.xc initParams.xc(end) + (1/initParams.kappa(end-1) - 1/initParams.kappa(end)) * sin(heading)];
-%                         initParams.yc = [initParams.yc initParams.yc(end) - (1/initParams.kappa(end-1) - 1/initParams.kappa(end)) * cos(heading)];
-%                     end
                     heading = heading + initParams.kappa(end) * initParams.L(end);
-                end
-                % Find corresponding state_idx for initParams.bnds
-                [~,c] = find(obj.segment_info == i);
-                stateIntvs = obj.lane.FactorValidIntvs(c(1):c(end),1:2);
-                initParams.stateIdxs = zeros(1,size(initParams.bnds,1));
-
-                for j=1:size(initParams.bnds,1)
-                    initParams.stateIdxs(j) = obj.findStateIdx(stateIntvs,initParams.bnds(j,2));
                 end
 
                 obj.arc_segments = [obj.arc_segments {initParams}];
@@ -432,30 +429,9 @@ classdef ArcMap < handle
                 end
             end
         end
-        
-        %% Data Association for 0m preview
-        function obj = DataAssociation0(obj)
-            % Data Association for 0m preview measurements
-            obj.assocL = zeros(length(obj.states),obj.lane.prev_num);
-            obj.assocR = obj.assocL;
-
-            for i=1:size(obj.lane.FactorValidIntvs,1)
-                lb = obj.lane.FactorValidIntvs(i,1);
-                ub = obj.lane.FactorValidIntvs(i,2);
-
-                leftSegIdx = obj.segment_info(1,i);
-                rightSegIdx = obj.segment_info(2,i);
-
-                for j=lb:ub
-                    % do not compare with rel idx
-                    obj.assocL(j,1) = obj.match0(leftSegIdx,j);
-                    obj.assocR(j,1) = obj.match0(rightSegIdx,j);
-                end
-            end
-        end
 
         %% Data Association for remaining preview
-        function obj = DataAssociationRem(obj)
+        function obj = DataAssociation(obj)
             % Data Association with current vehicle state and arc-spline
             % parameters. After each step in optimization, vehicle states
             % and arc parameters should be updated before re-association
@@ -493,10 +469,8 @@ classdef ArcMap < handle
             % Data Association
             n = size(obj.lane.FactorValidIntvs,1);
             
-%             obj.assocL = zeros(length(obj.states),obj.lane.prev_num);
-%             obj.assocR = obj.assocL;
-            obj.assocL(:,2:obj.lane.prev_num) = zeros(size(obj.assocL,1),obj.lane.prev_num-1);
-            obj.assocR(:,2:obj.lane.prev_num) = zeros(size(obj.assocR,1),obj.lane.prev_num-1);
+            obj.assocL = zeros(length(obj.states),obj.lane.prev_num);
+            obj.assocR = obj.assocL;
 
             for i=1:n
                 % State lb and ub for each large segment
@@ -514,14 +488,17 @@ classdef ArcMap < handle
                     % Filter Valid state idx
                     if obj.lane.prob(lane_idx,2) > obj.lane_prob_thres && obj.lane.prob(lane_idx,3) > obj.lane_prob_thres
                         for k=2:obj.lane.prev_num
-                            rel_pos = [10*(k-1);0;0];
-                            pos = P + R * rel_pos;
                             
-                            segIdxL = obj.matchRem(pos,R,leftSegIdx);
-                            segIdxR = obj.matchRem(pos,R,rightSegIdx);
-
-                            obj.assocL(j,k) = segIdxL;
-                            obj.assocR(j,k) = segIdxR;
+                            if obj.lane.lystd(lane_idx,k) < 3.4 || obj.lane.rystd(lane_idx,k) < 3.4
+                                rel_pos = [10*(k-1);0;0];
+                                pos = P + R * rel_pos;
+                                
+                                segIdxL = obj.match(pos,R,leftSegIdx);
+                                segIdxR = obj.match(pos,R,rightSegIdx);
+                            
+                                obj.assocL(j,k) = segIdxL;
+                                obj.assocR(j,k) = segIdxR;                                
+                            end                            
                         end
                     end
                 end
@@ -595,50 +572,26 @@ classdef ArcMap < handle
                 
                 rem_kappa = seg.kappa(SubSegIdx+1:end);
                 next_kappa = seg.kappa(SubSegIdx+1);
-                
-%                 seg.kappa = [kappa, (kappa + next_kappa)/2, rem_kappa];   
-
 %                 new_kappa = 2/(1/kappa + 1/next_kappa);
 %                 seg.kappa = [kappa, new_kappa, rem_kappa];
 
                 seg.kappa = [kappa, kappa, rem_kappa];
-                
-                rem_bnds = seg.bnds(SubSegIdx+1:end,:);
-                curr_lb = seg.bnds(SubSegIdx,1); curr_ub = seg.bnds(SubSegIdx,2);
-                new_bnd = ceil((curr_lb + curr_ub)/2);
-                new_bnds = [curr_lb new_bnd;
-                            new_bnd curr_ub];
-                seg.bnds = [new_bnds; rem_bnds];
 
             elseif SubSegIdx == length(seg.kappa)                
                 seg.L(SubSegIdx) = 1/2 * seg.L(SubSegIdx);
                 seg.L = [seg.L L/2];
                 rem_kappa = seg.kappa(1:SubSegIdx-1);
-                prev_kappa = seg.kappa(SubSegIdx-1);
-%                 seg.kappa = [rem_kappa, (prev_kappa + kappa)/2, kappa];
-                
+                prev_kappa = seg.kappa(SubSegIdx-1);                
 %                 new_kappa = 2/(1/kappa + 1/prev_kappa);
 %                 seg.kappa = [rem_kappa, new_kappa, kappa];
 
                 seg.kappa = [rem_kappa, kappa, kappa];
 
-                rem_bnds = seg.bnds(1:SubSegIdx-1,:);
-                curr_lb = seg.bnds(SubSegIdx,1); curr_ub = seg.bnds(SubSegIdx,2);
-                new_bnd = ceil((curr_lb + curr_ub)/2);
-                new_bnds = [curr_lb new_bnd;
-                            new_bnd curr_ub];
-                seg.bnds = [rem_bnds; new_bnds];
-
             else
                 kappaF = seg.kappa(1:SubSegIdx-1);
                 kappaB = seg.kappa(SubSegIdx+1:end);
                 LF = seg.L(1:SubSegIdx-1);
-                LB = seg.L(SubSegIdx+1:end);
-
-%                 kappaF_ = (kappaF(end)+kappa)/2;
-%                 kappaB_ = (kappa + kappaB(1))/2;
-%                 seg.kappa = [kappaF kappaF_ kappaB_ kappaB];
-                
+                LB = seg.L(SubSegIdx+1:end);                
 %                 kappaF_ = 2/(1/kappaF(end) + 1/kappa);
 %                 kappaB_ = 2/(1/kappa + 1/kappaB(1));
 %                 seg.kappa = [kappaF kappaF_ kappaB_ kappaB];
@@ -646,13 +599,6 @@ classdef ArcMap < handle
                 seg.kappa = [kappaF, kappa, kappa, kappaB];
                 seg.L = [LF 1/2*L 1/2*L LB];
 
-                bndsF = seg.bnds(1:SubSegIdx-1,:);
-                bndsB = seg.bnds(SubSegIdx+1:end,:);
-                curr_lb = seg.bnds(SubSegIdx,1); curr_ub = seg.bnds(SubSegIdx,2);
-                new_bnd = ceil((curr_lb + curr_ub)/2);
-                new_bnds = [curr_lb new_bnd;
-                            new_bnd curr_ub];
-                seg.bnds = [bndsF; new_bnds; bndsB];
             end
             % Update stateIdxs for segments
             [~,c] = find(obj.segment_info == SegIdx);
@@ -668,48 +614,8 @@ classdef ArcMap < handle
             disp(['SubSegment added at Segment Idx ',num2str(SegIdx),', SubSegment Idx ',num2str(SubSegIdx)])
         end
         
-        %% Point-Subsegment Matching for 0m preview measurement
-        function SubSegIdx = match0(obj,SegIdx,state_idx)
-            SubSegIdx = 0;
-            [~,c] = find(obj.segment_info == SegIdx);
-            stateIntv = obj.lane.FactorValidIntvs(c(1):c(end),:);
-            diff = zeros(1,length(c));
-            for i=1:length(c)-1
-                diff(i+1) = stateIntv(i+1,1) - stateIntv(i,2) - 1;
-            end
-            summed_diff = cumsum(diff);
-            
-            rel_pos = 0;
-            for i=1:length(c)
-                if stateIntv(i,1) <= state_idx && stateIntv(i,2) >= state_idx
-                    rel_pos = state_idx - stateIntv(1,1) + 1 - summed_diff(i);
-                end
-            end
-            if rel_pos == 0
-%                 disp(state_idx)
-%                 disp(stateIntv)
-%                 disp(diff)
-                error('No appropriate match 1 ... Most likely to be implementation error')
-            end
-
-            Seg = obj.arc_segments{SegIdx};
-            for i=1:size(Seg.bnds,1)
-                if Seg.bnds(i,1) <= rel_pos && Seg.bnds(i,2) >= rel_pos
-                    SubSegIdx = i;
-                end
-            end
-            if SubSegIdx == 0
-%                 disp(state_idx)
-%                 disp(stateIntv)
-%                 disp(diff)
-%                 disp(rel_pos)
-%                 disp(Seg.bnds)
-                error('No appropriate match 2... Most likely to be implementation error')
-            end
-        end
-        
         %% Point-SubSegment Matching for remaining preview measurement
-        function SubSegIdx = matchRem(obj,pos,att,SegIdx)
+        function SubSegIdx = match(obj,pos,att,SegIdx)
             % May need to fix
             % Matching is performed in 2D manner
             segPoints = obj.arc_nodes{SegIdx};

@@ -102,7 +102,7 @@ sol.full.optimize();
 
 %%
 
-sol.full.visualize();
+% sol.full.visualize();
 
 %% 
 sol.full.map.visualize2DMap();
