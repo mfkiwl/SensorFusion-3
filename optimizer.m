@@ -1,15 +1,16 @@
 classdef optimizer < handle
 % OPTIMIZER - Sensor Fusion Optimizer Module
 % All input data are from the dataprocessor module
-% [Usage Format]
-% sol = OPTIMIZER(imu,gnss,lane,can,imu_bias,t,prior_covs'basic',options)
+% [Usage Format: an example]
+% sol = OPTIMIZER(imu,gnss,lane,can,imu_bias,t,prior_covs,'basic',options)
 %
 % [imu, gnss, lane, can, imu_bias, t] : Pre-processed data
 % 
 % [Mode] : 'basic', 'partial', 'full', '2-phase'
 % * Basic: INS + GNSS Fusion
 % * Partial: INS + GNSS + WSS Fusion
-% * Full, 2-phase: INS + GNSS + WSS + Lane Detection Fusion (To be done)
+% * Full, 2-phase: INS + GNSS + WSS + Lane Detection Fusion 
+% - Currently, 'Full' mode is not implemented due to stability issues
 % 
 % [Options] : struct variable containing NLS optimization options
 % * options.CostThres: Cost difference threshold
@@ -18,14 +19,16 @@ classdef optimizer < handle
 % * options.Algorithm: GN(Gauss-Newton),LM(Levenberg-Marquardt),TR(Trust-Region)
 % ** GN and LM : no guarantee of convergence to local minima
 % Recommended to use GN or TR 
-% When using TR as solver algorithm, need to define parameters
-% TR parameters at 'main.m' should work fine
+% When using TR as solver algorithm, need to define parameters.
+% -TR parameters at 'main.m' should work fine
 % 
 % [Methods] : using OPTIMIZER 
 % * optimize() : Find optimized solution to SNLS problem
 % * visualize() : Plot optimization results
 % * update() : Update optimization mode and use previous optimized results
 % * Other function methods are not designed to be used outside of this script 
+%
+% Usage example is described in "main.m". 
 %
 % Implemented by JinHwan Jeon, 2022
 
@@ -116,7 +119,6 @@ classdef optimizer < handle
                 % Initial segmentation and data association is done in this
                 % step automatically
                 obj.map = ArcMap(obj.states,obj.lane,obj.lane.prob_thres); 
-                obj.phase = obj.phase + 1;
             end           
         end
 
@@ -131,9 +133,13 @@ classdef optimizer < handle
 
             if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
                 % Run optimization depending on algorithm options
+                %
                 % Phase 1 Optimization
+                %
                 % When lane data is not used, only phase 1 optimization is
-                % performed
+                % performed. 
+                % [Basic Mode]: INS + GNSS Fusion
+                % [Partial Mode]: INS + GNSS + WSS Fusion
 
                 if strcmp(obj.mode,'basic')
                     obj.opt.x0 = zeros(15*n,1);
@@ -153,37 +159,30 @@ classdef optimizer < handle
                 % Current model: Continuous Piecewise Arc Spline Lane Model
                 % 
                 % Phase 2 Optimization
-                % Use only the 0 m previewed measurements to 'pull' initial
-                % map arc segments. 
                 % 
                 % =================<Optimization step>=================
                 % 1. Fully converge the problem using fixed data
-                % association from initial segmentation information
+                % association from initial segmentation information, using
+                % only the 0m previewed measurements.
                 %
-                % * Note: Additional model is used for step 1 optimization 
-                % to guarantee convergence stability of arc splines.
-                % The original measurement model anchors first and last
-                % point of large segment, but specially for step 1, this
-                % anchoring process is done for every sub-segment. This is
-                % to prevent physically impossible optimization results for
-                % arc splines, when initial parameters are very inaccurate. 
-                % Without this additional model, optimization
-                % fails directly at step 2(Singular information matrix).                %
-                %
-                % 2. Validate current map and perform geometrical data
-                % association for all segments (add new sub-segments for
-                % invalid segments)
-                %
-                % 3. Fix current data association and fully converge the
-                % optimization problem
+                % 2. Validate sub optimal parametrization results, and add
+                % subsegments if needed. Perform data association for both 
+                % 0m previewed measurements and longer preview distance
+                % measurement points.
                 % 
-                % 4. Repeat steps 2~3 until all segments are valid
-                % ** Check if this is possible for small number segments
+                % 3. Fully converge the problem using fixed data
+                % association for 0m previewed measurements, but
+                % iteratively perform data association for other previewed
+                % point measurement points.
                 %
-                % 5. Move on to Phase 3
+                % 4. Validate optimization results and add subsegments if
+                % needed. Perform data association for both 0m previewed
+                % measurements and other preview distance measurements.
+                %
+                % 5. Until all segments are valid, repeat steps 3 ~ 4.
                 % =====================================================
                 %
-                obj.opt.iter = 1;
+                
                 obj.opt.options.IterThres = 100;
                 obj.updateTracker();                
                 num = obj.opt.seg_tracker(end);
@@ -201,19 +200,21 @@ classdef optimizer < handle
                 elseif strcmp(obj.opt.options.Algorithm,'TR')
                     obj.TrustRegion();
                 end
-                obj.map.validate(obj.phase);
-                % Step 2: Validate and perform data association
+                
+                obj.phase = 2;
+                % Step 2: Validate and perform data association for both 0m
+                % and other preview distance measurements
                 obj.map.validate(obj.phase);
                 valid = obj.map.valid_flag; % create function to determine validity
                 
                 obj.opt.options.IterThres = 50;
-                obj.opt.iter = obj.opt.iter + 1;
+
                 while ~valid
                     
                     obj.updateTracker();                    
                     obj.opt.x0 = zeros(16*n + obj.opt.seg_tracker(end),1);
 
-                    % Step 3: Full Convergence with fixed data association
+                    % Step 3: Full Convergence 
                     if strcmp(obj.opt.options.Algorithm,'GN')
                         obj.GaussNewton();
                     elseif strcmp(obj.opt.options.Algorithm,'LM')
@@ -222,35 +223,18 @@ classdef optimizer < handle
                         obj.TrustRegion();
                     end
                     
-                    % Step 2: Validate and perform data association 
+                    % Step 4: Validate and perform data association 
                     % Create new arc segments if needed 
                     obj.map.validate(obj.phase);
                     valid = obj.map.valid_flag;
-
-                    obj.opt.iter = obj.opt.iter + 1;
                 end
-%                 
-%                 obj.phase = obj.phase + 1;
-%                 Phase 3 Optimization
-%                 Extend measurement equation to user-defined preview
-%                 distance measurements. Optimization concept is the same
-%                 as phase 2.
-%                 
-%                 * Note: Currently the jacobian block creator for phase 2
-%                 and 3 are separated, but after fix all possible errors,
-%                 merge CreateBlock function, with phase number as
-%                 additional variable for mode selection.
-%                 
-%                 
-%                 =================<Optimization step>=================
-%                 1. Perform data association for extended map points
-%                 2. Fully converge the problem using fixed data
-%                 association from step 1
-%                 3. Repeat steps 1~2 until all segments are valid
-%                 =====================================================
                 
-
-
+                % Step 5: Repeat 3 ~ 4 until all segments are valid
+                % Show optimization results after optimization
+                % 
+                % Number of Sub-segments for each segments
+                % Summary for each Sub-segments: Curvature, Arc Length
+                % Summary for each Segments: Curvature, Arc Length
             end
         end
 
@@ -717,6 +701,8 @@ classdef optimizer < handle
                 dummy_imu = obj.imu;
                 if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
                     dummy_arc_segments = obj.map.arc_segments;
+                    dummy_assocL = obj.map.assocL;
+                    dummy_assocR = obj.map.assocR;
                 end
 
                 [res_,jac_] = obj.cost_func(x0);
@@ -742,6 +728,8 @@ classdef optimizer < handle
                     if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
                         obj.map.states = dummy_states;
                         obj.map.arc_segments = dummy_arc_segments;
+                        obj.map.assocL = dummy_assocL;
+                        obj.map.assocR = dummy_assocR;
                     end
                     string = 'Rejected';
                     flag = false;                    
@@ -796,7 +784,12 @@ classdef optimizer < handle
             % but in this sensor fusion framework, Jacobian must always be
             % full rank. Therefore, 'rank-deficient Jacobian' part of the
             % algorithm is not implemented.
-
+            %
+            % Moreover, the core part of the algorithm is "incremental"
+            % trust region method, but here the optimization is done in a
+            % batch manner. Therefore incremental solver framework is not
+            % adopted in this implementation.
+            
             disp('[SNLS solver: Approximate Trust Region Method]')
             disp(['Current Phase Number: ',num2str(obj.phase)])
             fprintf(' Iteration      f(x)          step        TR_radius    Acceptance\n');
@@ -836,6 +829,8 @@ classdef optimizer < handle
 
                 if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
                     dummy_arc_segments = obj.map.arc_segments;
+                    dummy_assocL = obj.map.assocL;
+                    dummy_assocR = obj.map.assocR;
                 end
                 
                 [res_,jac_] = obj.cost_func(x0);
@@ -861,6 +856,8 @@ classdef optimizer < handle
                     if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
                         obj.map.states = dummy_states;
                         obj.map.arc_segments = dummy_arc_segments;
+                        obj.map.assocL = dummy_assocL;
+                        obj.map.assocR = dummy_assocR;
                     end
                     string = 'Rejected';
                     flag = false;
@@ -1938,21 +1935,6 @@ classdef optimizer < handle
             else
                 res = yc_b + sqrt((1/kappa_)^2 - xc_b^2) - dij;
             end
-            
-%             if obj.opt.iter == 1
-%                 
-%             else
-%                 % Modified Measurement using fzero
-%                 x = initParams(1); y = initParams(2); heading = initParams(3);            
-%                 
-%                 for i=1:SubSegIdx-1
-%                     x = x + 1/kappa(i) * (sin(heading + kappa(i) * L(i)) - sin(heading));
-%                     y = y - 1/kappa(i) * (cos(heading + kappa(i) * L(i)) - cos(heading));
-%                     heading = heading + kappa(i) + L(i);
-%                 end
-%                 dPred = obj.getDist(x,y,heading,R2d,P,kappa(SubSegIdx),L(SubSegIdx));
-%                 res = dPred - dij;
-%             end
         end
 
         %% Arc Spline based Numerical Jacobian Computation 2 Phase 2
@@ -2307,9 +2289,6 @@ classdef optimizer < handle
             % Using 2 and 3, find repeated arguments in Jacobian &
             % Information matrix
             % 
-            % Reason for matrix singularity identified
-            % Using the same curvature value for replicated segment was the
-            % main cause. --> algebraically same jacobian
 
             a_diags = diag(obj.opt.info);
             idx = find(a_diags == 0);
@@ -2343,24 +2322,7 @@ classdef optimizer < handle
                     disp(['Parameter Location: ',num2str(I(i)),', ',num2str(J(i))])
                 end
             end
-
-            % Check for repeated jacobian in Arc Spline based model
-            % For faster search, we first trim jacobian matrix for lane
-            % parameters only and search for repeated candidates
-
-%             AS_jac = full(sol.full.opt.AS_jac(:,16*n+1:end));
-%             AS2_jac = full(sol.full.opt.AS2_jac(:,16*n+1:end));
-% 
-%             for i=1:size(AS_jac,1)
-%                 
-%                 for j=i+1:size(AS_jac,1)
-%                     diff = (AS_jac(i,:) - AS_jac(j,:)) * (AS_jac(i,:) - AS_jac(j,:))';
-% %                     disp(['AS_jac row ',num2str(i),', AS2_jac row ',num2str(j)])
-%                     if diff < 1e-8
-%                         warning(['AS_jac row ',num2str(i),', AS_jac row ',num2str(j),' almost equal'])
-%                     end
-%                 end
-%             end
+            
             error('Information matrix is singular... stopping optimization')
         end
            
@@ -2511,23 +2473,6 @@ classdef optimizer < handle
             end
         end
         
-        %% Measurement Prediction
-        function dist = getDist(x,y,heading,R2d,P,kappa,L)
-            
-            L_opt = fminbnd(@fun,0,L); % ,2*pi*abs(1/kappa)
-            X_glob = [x + 1/kappa * (sin(heading + kappa * L_opt) - sin(heading));
-                      y - 1/kappa * (cos(heading + kappa * L_opt) - cos(heading))];
-            X_body = R2d' * (X_glob - P(1:2));
-            dist = X_body(2);
-
-            function Y = fun(X)
-                x_pred = x + 1/kappa * (sin(heading + kappa * X) - sin(heading));
-                y_pred = y - 1/kappa * (cos(heading + kappa * X) - cos(heading));
-                X_b = R2d' * ([x_pred;y_pred] - P(1:2));
-                Y = X_b(1);
-            end
-        end
-
     end
 end
 

@@ -36,7 +36,7 @@ classdef ArcMap < handle
             obj.InitSegmentParametrization();
 
             % Data Association
-            obj.DataAssociation();% --> initial data association is done using init segmentation information
+            obj.DataAssociation0();% --> initial data association is done using init segmentation information
         end
         
         %% Map Update
@@ -63,8 +63,10 @@ classdef ArcMap < handle
             end
 
             % Perform data association with updated variables
-%             obj.associate(); % update data association after one batch
-%             optimization process for stable convergence
+            % Update data association for remaining preview distance 
+            % measurements iteratively
+            obj.DataAssociationRem();     
+            % change if this is too unstable!
         end
 
         %% Map Visualization (2D Segmentwise Point Map)
@@ -179,25 +181,17 @@ classdef ArcMap < handle
                 if max_val > 2
                     obj.replicate(i,badSubSegIdx);
                     obj.valid_flag = false;
-                end
-
-%                 org_idxs = 1:length(obj.validity{i});
-%                 trimmed_idxs = org_idxs(obj.validity{i} > 2);
-%                 max_errs = obj.max_err{i}(obj.validity{i} > 2);
-%                 
-%                 if ~isempty(max_errs)                    
-%                     [~,idx] = max(max_errs);
-%                     badSubSegIdx = trimmed_idxs(idx);
-%                     obj.replicate(i,badSubSegIdx);
-%                     obj.valid_flag = false;
-%                 end                
+                end        
             end
             if obj.valid_flag
+                % Finish optimization and display summary
                 disp('All segments are valid, optimization finished...')
+                obj.summary();
             end
             disp('=========================================================')
 
-            obj.DataAssociation();
+            obj.DataAssociation0();
+            obj.DataAssociationRem();
         end
        
     end
@@ -301,27 +295,6 @@ classdef ArcMap < handle
             end
             
 
-        end
-        
-        %% Initial Data Association
-        function obj = DataAssociation(obj)
-            % Initial Data Association for phase 2 optimization
-            obj.assocL = zeros(length(obj.states),obj.lane.prev_num);
-            obj.assocR = obj.assocL;
-
-            for i=1:size(obj.lane.FactorValidIntvs,1)
-                lb = obj.lane.FactorValidIntvs(i,1);
-                ub = obj.lane.FactorValidIntvs(i,2);
-
-                leftSegIdx = obj.segment_info(1,i);
-                rightSegIdx = obj.segment_info(2,i);
-
-                for j=lb:ub
-                    % do not compare with rel idx
-                    obj.assocL(j,1) = obj.DataAssocMatch(leftSegIdx,j);
-                    obj.assocR(j,1) = obj.DataAssocMatch(rightSegIdx,j);
-                end
-            end
         end
 
         %% Initial segmentation
@@ -460,14 +433,35 @@ classdef ArcMap < handle
             end
         end
         
-        %% Data Association
-        function obj = associate(obj,phase)
+        %% Data Association for 0m preview
+        function obj = DataAssociation0(obj)
+            % Data Association for 0m preview measurements
+            obj.assocL = zeros(length(obj.states),obj.lane.prev_num);
+            obj.assocR = obj.assocL;
+
+            for i=1:size(obj.lane.FactorValidIntvs,1)
+                lb = obj.lane.FactorValidIntvs(i,1);
+                ub = obj.lane.FactorValidIntvs(i,2);
+
+                leftSegIdx = obj.segment_info(1,i);
+                rightSegIdx = obj.segment_info(2,i);
+
+                for j=lb:ub
+                    % do not compare with rel idx
+                    obj.assocL(j,1) = obj.match0(leftSegIdx,j);
+                    obj.assocR(j,1) = obj.match0(rightSegIdx,j);
+                end
+            end
+        end
+
+        %% Data Association for remaining preview
+        function obj = DataAssociationRem(obj)
             % Data Association with current vehicle state and arc-spline
             % parameters. After each step in optimization, vehicle states
             % and arc parameters should be updated before re-association
             %
             % Create arc segment node points before data association
-            % Data Association for phase 3 optimization
+            
             n = length(obj.arc_segments);
             for i=1:n
                 m = length(obj.arc_segments{i}.kappa);
@@ -499,22 +493,18 @@ classdef ArcMap < handle
             % Data Association
             n = size(obj.lane.FactorValidIntvs,1);
             
-            obj.assocL = zeros(length(obj.states),obj.lane.prev_num);
-            obj.assocR = obj.assocL;
-            
-            if phase == 2
-                prev_max = 1;
-            elseif phase == 3
-                prev_max = obj.lane.prev_num;
-            end
-            
+%             obj.assocL = zeros(length(obj.states),obj.lane.prev_num);
+%             obj.assocR = obj.assocL;
+            obj.assocL(:,2:obj.lane.prev_num) = zeros(size(obj.assocL,1),obj.lane.prev_num-1);
+            obj.assocR(:,2:obj.lane.prev_num) = zeros(size(obj.assocR,1),obj.lane.prev_num-1);
+
             for i=1:n
                 % State lb and ub for each large segment
                 lb = obj.lane.FactorValidIntvs(i,1);
                 ub = obj.lane.FactorValidIntvs(i,2);
 
-                leftSegmentIdx = obj.segment_info(1,i);
-                rightSegmentIdx = obj.segment_info(2,i);
+                leftSegIdx = obj.segment_info(1,i);
+                rightSegIdx = obj.segment_info(2,i);
 
                 % Perform matching for valid points
                 for j=lb:ub
@@ -523,22 +513,16 @@ classdef ArcMap < handle
                     P = obj.states{j}.P;
                     % Filter Valid state idx
                     if obj.lane.prob(lane_idx,2) > obj.lane_prob_thres && obj.lane.prob(lane_idx,3) > obj.lane_prob_thres
-                        for k=1:prev_max
+                        for k=2:obj.lane.prev_num
                             rel_pos = [10*(k-1);0;0];
                             pos = P + R * rel_pos;
                             
-                            segIdxL = obj.match(pos,R,leftSegmentIdx);
-                            segIdxR = obj.match(pos,R,rightSegmentIdx);
+                            segIdxL = obj.matchRem(pos,R,leftSegIdx);
+                            segIdxR = obj.matchRem(pos,R,rightSegIdx);
 
                             obj.assocL(j,k) = segIdxL;
                             obj.assocR(j,k) = segIdxR;
                         end
-                    else % For low reliability lane measurement, use only 0m preview measurement                        
-                        segIdxL = obj.match(P,R,leftSegmentIdx);
-                        segIdxR = obj.match(P,R,rightSegmentIdx);
-
-                        obj.assocL(j,1) = segIdxL;
-                        obj.assocR(j,1) = segIdxR;
                     end
                 end
             end
@@ -684,9 +668,9 @@ classdef ArcMap < handle
             disp(['SubSegment added at Segment Idx ',num2str(SegIdx),', SubSegment Idx ',num2str(SubSegIdx)])
         end
         
-         %% Find initial data association match
-         function idx = DataAssocMatch(obj,SegIdx,state_idx)
-            idx = 0;
+        %% Point-Subsegment Matching for 0m preview measurement
+        function SubSegIdx = match0(obj,SegIdx,state_idx)
+            SubSegIdx = 0;
             [~,c] = find(obj.segment_info == SegIdx);
             stateIntv = obj.lane.FactorValidIntvs(c(1):c(end),:);
             diff = zeros(1,length(c));
@@ -711,10 +695,10 @@ classdef ArcMap < handle
             Seg = obj.arc_segments{SegIdx};
             for i=1:size(Seg.bnds,1)
                 if Seg.bnds(i,1) <= rel_pos && Seg.bnds(i,2) >= rel_pos
-                    idx = i;
+                    SubSegIdx = i;
                 end
             end
-            if idx == 0
+            if SubSegIdx == 0
 %                 disp(state_idx)
 %                 disp(stateIntv)
 %                 disp(diff)
@@ -724,8 +708,8 @@ classdef ArcMap < handle
             end
         end
         
-        %% Point-SubSegment Matching
-        function SubSegIdx = match(obj,pos,att,SegIdx)
+        %% Point-SubSegment Matching for remaining preview measurement
+        function SubSegIdx = matchRem(obj,pos,att,SegIdx)
             % May need to fix
             % Matching is performed in 2D manner
             segPoints = obj.arc_nodes{SegIdx};
@@ -776,6 +760,28 @@ classdef ArcMap < handle
             else
                 SubSegIdx = 0;
             end
+        end
+        
+        %% Display Optimization Summary
+        function summary(obj)
+            disp('[Summary of Optimized Arc Segments and Subsegments]')
+            
+            numSubSeg = 0;
+            for i=1:length(obj.arc_segments)
+                seg = obj.arc_segments{i};
+                numSubSeg = numSubSeg + length(seg.L);
+
+                disp(['Segment No. ',num2str(i),': ',num2str(length(seg.L)),' Subsegments'])
+                
+                for j=1:length(seg.L)
+                    disp(['   Subsegment No. ',num2str(j), ...
+                          ': L = ',num2str(seg.L(j),3), ...
+                          'm, R = ',num2str(abs(1/seg.kappa(j)),3),'m'])
+                end
+                disp(['Segment Length: ',num2str(sum(seg.L),3),'m'])
+            end
+            disp(['Number of Segments: ',num2str(length(obj.arc_segments)), ...
+                  'Number of Subsegments: ',num2str(numSubSeg)])
         end
 
     end
