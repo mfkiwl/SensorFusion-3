@@ -19,6 +19,7 @@ classdef ArcMap < handle
         max_err
         valid_flag = false
         dummy = struct() % Dummy variable for debugging
+        initFit
     end
     
     %% Public Methods
@@ -36,19 +37,21 @@ classdef ArcMap < handle
             
             % Initial Segment Parametrization
             obj.InitSegmentParametrization();
-
+        end
+        
+        %% Debugging
+        function obj = InitFullParametrize(obj)
             % Perform Arc Spline based lane fitting with initial
             % parametrization data
             for i=1:length(obj.arc_segments)
-                fit = ArcFit(obj.arc_segments{i},obj.segments{i});                
+                obj.initFit = ArcFit(obj.arc_segments{i},obj.segments{i}(1:2,:),i);    
+                obj.initFit.optimize();
                 % retrieve params after optimization for each segment
-                obj.arc_segments{i} = fit.getParams();
+                obj.arc_segments{i} = obj.initFit.getParams();
             end
-
-            % Perform data association
-            obj.DataAssociation();
+            obj.DataAssociation(); 
         end
-        
+
         %% Map Update for 
         function obj = update(obj,states,arc_delta_params)
             % Update variables after iterative optimization step
@@ -306,7 +309,7 @@ classdef ArcMap < handle
             % Adjust this value to increase or decrease the number of line
             % interpolation. Typically, values smaller than 0.3m is
             % recommended.
-            line_acc_thres = 0.1;
+            line_acc_thres = 0.2;
 
             %% Create Line and visualize current segmentation state 
             init_point = LP(:,intv(1));

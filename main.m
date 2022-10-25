@@ -98,6 +98,19 @@ sol.full.optimize();
 % Switch optimization mode to 2-phase and optimize with lane data
 sol.full.opt.options.Algorithm = 'TR';
 sol.full.update('2-phase'); % Update mode to 2-phase
+
+initArcParams = sol.full.map.arc_segments; % save data
+
+% Test Arc Fit
+% id = 11;
+% LP = sol.full.map.segments{id};
+% params = sol.full.map.arc_segments{id};
+% 
+% test = ArcFit(params,LP,id);
+% test.optimize();
+% test.visualize();
+
+%%
 sol.full.optimize();
 
 %%

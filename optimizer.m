@@ -119,7 +119,8 @@ classdef optimizer < handle
                 % Initial segmentation and data association is done in this
                 % step automatically
                 % Complete arc fitting is done in this step
-                obj.map = ArcMap(obj.states,obj.lane,obj.lane.prob_thres); 
+                obj.map = ArcMap(obj.states,obj.lane,obj.lane.prob_thres);
+                obj.map.InitFullParametrize();
             end           
         end
 
