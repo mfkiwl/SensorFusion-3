@@ -2,7 +2,7 @@
 % Run this file from dataprocessing to optimization
 
 clear; close all; clc;
-%% Load Raw Data
+%% Load Raw Data (Not 'really' raw, take a look at 'dataloader.py')
 imu = load('imu.mat');
 gnss = load('gnss.mat');
 lane = load('lane.mat');
@@ -73,6 +73,7 @@ options.TR.thres = 1e-6; % Trust Region Radius Threshold
 
 lane_.prev_num = 6; % Set preview number
 lane_.prob_thres = 0.6; % Set lane prob threshold for discarding low-reliability data
+lane_.minL = 5; % Minimum arc length (to prevent singularity)
 
 %% INS + GNSS Fusion 
 % sol = struct();
@@ -97,26 +98,22 @@ sol.full = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options
 sol.full.optimize();
 % Switch optimization mode to 2-phase and optimize with lane data
 sol.full.opt.options.Algorithm = 'TR';
+
+%%
 sol.full.update('2-phase'); % Update mode to 2-phase
 
 initArcParams = sol.full.map.arc_segments; % save data
 
-% Test Arc Fit
-% id = 11;
-% LP = sol.full.map.segments{id};
-% params = sol.full.map.arc_segments{id};
-% 
-% test = ArcFit(params,LP,id);
-% test.optimize();
-% test.visualize();
-
 %%
+
+% To test phase 2 optimization, use saved parameters from phase 1
+% sol.full.map.arc_segments = load('initArcParams.mat');
+
 sol.full.optimize();
 
 %%
+% sol.full.map.validate();
+%%
+sol.full.visualize();
 
-% sol.full.visualize();
-
-%% 
-sol.full.map.visualize2DMap();
 

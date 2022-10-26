@@ -1,8 +1,19 @@
 classdef ArcFit < handle
     %ArcFit NLS based simple Arc Fitting given data points
-    % Given data points and initial arc parameters, this solver module
-    % finds the optimal arc parameter set.
-    % Since the goal is to find a good 
+    %
+    %   Given data points and initial arc parameters, this solver module
+    %   finds the optimal arc parameter set.
+    %   This module performs optimization for only given number of segments
+    %   * No segment division/addition
+    %   
+    %   [NLS Models]
+    %   Model 1: Arc-Point Measurement Model
+    %   Model 2: Arc Initial/Final Point Anchoring Model
+    %
+    %   * The optimization process is very sensitive to covariance values.
+    %   * Choosing inappropriate covariance weights may lead to singularity
+    %   in extreme scenarios (Sharp Turn, etc)
+    %   Implemented by JinHwan Jeon, 2022
 
     properties(Access = public)
         id
@@ -46,11 +57,10 @@ classdef ArcFit < handle
             obj.TrustRegion();
         end
         
-        %% Visualize
+        %% Visualize: One Segment Optimization
         function visualize(obj)
             figure(1);
             p_est = plot(obj.points(1,:),obj.points(2,:),'r.'); hold on; grid on; axis equal;
-%             plot(obj.points(1,72:78),obj.points(2,72:78),'mx');
             n = length(obj.params.kappa);
             heading = obj.params.tau0;
             SegPoints = [obj.params.x0;
@@ -69,110 +79,17 @@ classdef ArcFit < handle
                 p_node = plot(addedSegPoints(1,1),addedSegPoints(2,1),'co');
                 plot(addedSegPoints(1,end),addedSegPoints(2,end),'co');
             end
-            p_lane = plot(SegPoints(1,:),SegPoints(2,:),'k-');
-%             p_seg = plot(SegPoints(1,1),SegPoints(2,1),'ms');
-%             plot(SegPoints(1,end),SegPoints(2,end),'ms');
-            
+            p_lane = plot(SegPoints(1,:),SegPoints(2,:),'k-');            
             xlabel('Global X(m)'); ylabel('Global Y(m)');
             title('Optimized Vehicle Trajectory and Lane Segments');
             legend([p_est,p_lane,p_node], ...
                    'Input Lane Points', ...
                    'Optimized Arc Spline', ...
                    'Lane Sub-segment');
-
         end
-        
         
     end
     methods(Access = private)  
-        %% Create initial parameters
-        function obj = initParams(obj)
-            P1 = obj.points(:,1); P2 = obj.points(:,end);
-            obj.params.tau0 = (P2(2) - P1(2))/(P2(1) - P1(1));
-            obj.params.x0 = P1(1); obj.params.y0 = P1(2);
-            obj.params.kappa = 1e-6; obj.params.L = sqrt((P1 - P2)'*(P1-P2));
-        end
-
-        %% Gauss-Newton Method
-        function obj = GaussNewton(obj)
-            % Gauss-Newton method shows very fast convergence compared to 
-            % Trust-Region method, but suffers from low convergence stability
-            % near the local minima (oscillation frequently observed)
-            % Oscillation detection was implemented to reduce meaningless
-            % iterations. 
-
-            disp('[SNLS solver: Gauss-Newton Method]')            
-            fprintf(' Iteration     f(x)           step\n');
-            formatstr = ' %5.0f   %13.6g  %13.6g ';
-            n = length(obj.params.kappa);
-            x0 = zeros(2*n+3,1);
-            [res,jac] = obj.cost_func(x0);
-            prev_cost = res' * res;
-            str = sprintf(formatstr,0,prev_cost,norm(x0));
-            disp(str)
-
-            i = 1;
-            
-            cost_stack = prev_cost; % Stack costs for oscillation detection
-
-            while true
-                A = jac' * jac;
-                b = -jac' * res;
-
-                x0 = A \ b; 
-                
-                [res,jac] = obj.cost_func(x0);
-
-                cost = res' * res;
-                cost_stack = [cost_stack cost];
-                step_size = norm(x0);
-                
-                str = sprintf(formatstr,i,cost,step_size);
-                disp(str)
-                
-                % Ending Criterion
-                flags = [];
-                flags = [flags abs(prev_cost - cost) > obj.options.CostThres];
-                flags = [flags step_size > obj.options.StepThres];
-                flags = [flags i < obj.options.IterThres];
-                
-                % Check for oscillation around the local minima
-                if length(cost_stack) >= 5
-                    osc_flag = obj.DetectOsc(cost_stack);
-                else
-                    osc_flag = false;
-                end
-
-                if length(find(flags)) ~= length(flags) % If any of the criterion is not met, end loop
-                    
-                    obj.retract(x0);
-
-                    disp('[Optimization Finished...]')
-                    idx = find(~flags,1);
-                    
-                    if idx == 1
-                        disp(['Current cost difference ',num2str(abs(prev_cost-cost)),' is below threshold: ',num2str(obj.options.CostThres)])
-                    elseif idx == 2
-                        disp(['Current step size ',num2str(step_size),' is below threshold: ',num2str(obj.options.StepThres)])
-                    elseif idx == 3
-                        disp(['Current iteration number ',num2str(i),' is above threshold: ',num2str(obj.options.IterThres)])
-                    end
-
-                    break;
-                elseif osc_flag
-                    obj.retract(x0);
-
-                    disp('[Optimization Finished...]')
-                    disp('Oscillation about the local minima detected')
-                    break;
-                else
-                    i = i + 1;
-                    prev_cost = cost;
-                end
-                
-            end                        
-        end
-
         %% Trust Region Method
         function obj = TrustRegion(obj)
             % Indefinite Gauss-Newton-Powell's Dog-Leg algorithm
@@ -226,9 +143,7 @@ classdef ArcFit < handle
 
                 if ~isempty(find(isnan(h_gn),1)) || ~isempty(find(isnan(h_gd),1))
                     obj.opt.jac = jac;
-                    obj.opt.info = A;
-
-                    
+                    obj.opt.info = A;                    
 
                     error('Singular Matrix')
                 end
@@ -304,37 +219,43 @@ classdef ArcFit < handle
             obj.retract(x0);
             [ME_res,ME_jac] = obj.CreateMEBlock();
             [AM_res,AM_jac] = obj.CreateAMBlock();
-%             [AL_res,AL_jac] = obj.CreateALBlock();
-            AL_res = []; AL_jac = [];
-            res = vertcat(ME_res,AM_res,AL_res);
-            jac = sparse(vertcat(ME_jac,AM_jac,AL_jac));
+            res = vertcat(ME_res,AM_res);
+            jac = vertcat(ME_jac,AM_jac);
         end
 
         %% Create Measurement Block
         function [res,jac] = CreateMEBlock(obj)
 
-            blk_height = nnz(obj.assoc);
+            blk_height = size(obj.points,2);
             n = length(obj.params.kappa);
             blk_width = 2 * n + 3;
             
             res = zeros(blk_height,1);
-            jac = zeros(blk_height,blk_width);
-            cnt = 1;
+%             jac = zeros(blk_height,blk_width);
+            
+            I = zeros(1,3*size(obj.points,2)+2*sum(obj.assoc));
+            J = I; V = I;
+            jac_cnt = 0;
             for i=1:length(obj.points)
                 SegIdx = obj.assoc(i);
                 Point = obj.points(1:2,i);
-                if SegIdx > 0
-                    [init_jac,kappa_jac,L_jac,anchored_res] = obj.MEjac(SegIdx,Point);
+                [init_jac,kappa_jac,L_jac,anchored_res] = obj.MEjac(SegIdx,Point);
                     
-                    res(cnt) = anchored_res;
-                    % Since the number of parameters are not huge, we skip
-                    % converting jacobian into sparse array
-                    jac(cnt,1:3) = init_jac;
-                    jac(cnt,4:3+SegIdx) = kappa_jac;
-                    jac(cnt,4+n:3+n+SegIdx) = L_jac;
-                    cnt = cnt + 1;
-                end
+                res(i) = anchored_res;
+                % Since the number of parameters are not huge, we skip
+                % converting jacobian into sparse array
+                [I_P,J_P,V_P] = sparseFormat(i,1:3,init_jac);
+                [I_k,J_k,V_k] = sparseFormat(i,3+1:3+SegIdx,kappa_jac);
+                [I_l,J_l,V_l] = sparseFormat(i,3+n+1:3+n+SegIdx,L_jac);
+                I(jac_cnt+1:jac_cnt+3+2*SegIdx) = [I_P, I_k, I_l];
+                J(jac_cnt+1:jac_cnt+3+2*SegIdx) = [J_P, J_k, J_l];
+                V(jac_cnt+1:jac_cnt+3+2*SegIdx) = [V_P, V_k, V_l];
+%                 jac(i,1:3) = init_jac;
+%                 jac(i,4:3+SegIdx) = kappa_jac;
+%                 jac(i,4+n:3+n+SegIdx) = L_jac;    
+                jac_cnt = jac_cnt + 3 + 2 * SegIdx;
             end
+            jac = sparse(I,J,V,blk_height,blk_width);
 
         end
         
@@ -417,6 +338,7 @@ classdef ArcFit < handle
             jac(3:4,1:3) = init_jac; 
             jac(3:4,3+1:3+n) = kappa_jac;
             jac(3:4,3+n+1:end) = L_jac;
+            jac = sparse(jac);
         end
 
         %% Create Anchor Measurement Jacobian
@@ -504,21 +426,6 @@ classdef ArcFit < handle
                 res = nodePoints(:,end) - obj.points(1:2,end);
             end
         end
-        
-        %% Create Arc Length Measurement Block
-        function [res,jac] = CreateALBlock(obj)
-            blk_height = length(obj.params.L);
-            n = length(obj.params.kappa);
-            blk_width = 2 * n + 3;
-            res = zeros(blk_height,1);
-            jac = zeros(blk_height,blk_width);
-
-            for i=1:length(obj.params.L)
-                res(i) = obj.params.L(i)^(1/2);
-                jac(i,3+n+i) = 1/2 * (obj.params.L(i))^(-1/2);
-                % 1/(2 * sqrt(obj.params.L(i)));
-            end
-        end
 
         %% Data Association
         function obj = associate(obj)
@@ -548,14 +455,13 @@ classdef ArcFit < handle
             obj.params.y0 = obj.params.y0 + dX(2);
             obj.params.tau0 = obj.params.tau0 + dX(3);
             obj.params.kappa = obj.params.kappa + dX(4:3+n)';
-%             obj.params.L = ((obj.params.L).^(1/2) + dX(4+n:end)').^2;
             obj.params.L = ((obj.params.L - minL).^(1/2) + dX(4+n:end)').^2 + minL;
             
-%             % Perform data association
+            % Perform data association
             obj.associate(); 
         end
 
-        %% Check Optimization Validity
+        %% Check Optimization Validity -- Delete After reference
         function obj = validate(obj)
             obj.validity = zeros(1,length(obj.params.kappa));
             initParams = [obj.params.x0, obj.params.y0, obj.params.tau0];
@@ -590,7 +496,7 @@ classdef ArcFit < handle
 %             obj.associate();
         end
 
-        %% Replicate current invalid segment
+        %% Replicate current invalid segment -- Delete After reference
         function obj = replicate(obj,SegIdx)
             if length(obj.params.kappa) == 1
                 curr_kappa = obj.params.kappa(SegIdx);
@@ -656,7 +562,6 @@ classdef ArcFit < handle
         function centerPoints = propCenter(initParams,kappa,L)
             x0 = initParams(1); y0 = initParams(2); heading = initParams(3);
             
-
             for i=1:length(kappa)
                 if i == 1
                     centerPoints = [x0 - 1/kappa(i) * sin(heading); y0 + 1/kappa(i) * cos(heading)];
@@ -665,7 +570,6 @@ classdef ArcFit < handle
                 end
                 heading = heading + kappa(i) * L(i);
             end
-%             disp(centerPoints)
         end
 
         %% Propagate Arc Node Points
@@ -745,7 +649,7 @@ classdef ArcFit < handle
             end
         end
         
-        %% Return validity of certain point after optimization
+        %% Return validity of certain point after optimization -- Delete After Reference
         function flag = IsValid(X,Xc,kappa)
             cov = 0.5^2;
             diff = sqrt((X - Xc)' * (X - Xc)) - abs(1/kappa);
@@ -756,20 +660,7 @@ classdef ArcFit < handle
                 flag = true;
             end
         end
-        
-        %% Detect oscillation by computing maximum deviation from average (recent 5 costs)
-        function osc_flag = DetectOsc(cost_stack)
-            last_five = cost_stack(end-4:end);
-            avg = mean(last_five);
-            delta = last_five - avg;
-            % If all recent costs are near the average, detect oscillation
-            if max(delta) < 1e2
-                osc_flag = true;
-            else
-                osc_flag = false;
-            end
-        end
-        
+                
         %% Apply ZOH for association matrix
         function arr = ZOH(arr_in)
             % For all zeros inside the association matrix, change to

@@ -1,36 +1,36 @@
 classdef optimizer < handle
 % OPTIMIZER - Sensor Fusion Optimizer Module
-% All input data are from the dataprocessor module
-% [Usage Format: an example]
-% sol = OPTIMIZER(imu,gnss,lane,can,imu_bias,t,prior_covs,'basic',options)
+%   All input data are from the dataprocessor module
+%   [Usage Format: an example]
+%   sol = OPTIMIZER(imu,gnss,lane,can,imu_bias,t,prior_covs,'basic',options)
 %
-% [imu, gnss, lane, can, imu_bias, t] : Pre-processed data
+%   [imu, gnss, lane, can, imu_bias, t] : Pre-processed data
 % 
-% [Mode] : 'basic', 'partial', 'full', '2-phase'
-% * Basic: INS + GNSS Fusion
-% * Partial: INS + GNSS + WSS Fusion
-% * Full, 2-phase: INS + GNSS + WSS + Lane Detection Fusion 
-% - Currently, 'Full' mode is not implemented due to stability issues
+%   [Mode] : 'basic', 'partial', 'full', '2-phase'
+%   * Basic: INS + GNSS Fusion
+%   * Partial: INS + GNSS + WSS Fusion
+%   * Full, 2-phase: INS + GNSS + WSS + Lane Detection Fusion 
+%   - Currently, 'Full' mode is not implemented due to stability issues
 % 
-% [Options] : struct variable containing NLS optimization options
-% * options.CostThres: Cost difference threshold
-% * options.StepThres: Step size threshold
-% * options.IterThres: Iteration limit
-% * options.Algorithm: GN(Gauss-Newton),LM(Levenberg-Marquardt),TR(Trust-Region)
-% ** GN and LM : no guarantee of convergence to local minima
-% Recommended to use GN or TR 
-% When using TR as solver algorithm, need to define parameters.
-% -TR parameters at 'main.m' should work fine
+%   [Options] : struct variable containing NLS optimization options
+%   * options.CostThres: Cost difference threshold
+%   * options.StepThres: Step size threshold
+%   * options.IterThres: Iteration limit
+%   * options.Algorithm: GN(Gauss-Newton),LM(Levenberg-Marquardt),TR(Trust-Region)
+%   ** GN and LM : no guarantee of convergence to local minima
+%   Recommended to use GN or TR 
+%   When using TR as solver algorithm, need to define parameters.
+%   -TR parameters at 'main.m' should work fine
 % 
-% [Methods] : using OPTIMIZER 
-% * optimize() : Find optimized solution to SNLS problem
-% * visualize() : Plot optimization results
-% * update() : Update optimization mode and use previous optimized results
-% * Other function methods are not designed to be used outside of this script 
+%   [Methods] : using OPTIMIZER 
+%   * optimize() : Find optimized solution to SNLS problem
+%   * visualize() : Plot optimization results
+%   * update() : Update optimization mode and use previous optimized results
+%   * Other function methods are not designed to be used outside of this script 
 %
-% Usage example is described in "main.m". 
+%   Usage example is introduced in "main.m". 
 %
-% Implemented by JinHwan Jeon, 2022
+%   Implemented by JinHwan Jeon, 2022
 
     properties (Access = public)
         imu
@@ -120,7 +120,6 @@ classdef optimizer < handle
                 % step automatically
                 % Complete arc fitting is done in this step
                 obj.map = ArcMap(obj.states,obj.lane,obj.lane.prob_thres);
-                obj.map.InitFullParametrize();
             end           
         end
 
@@ -177,7 +176,8 @@ classdef optimizer < handle
                 %
                 
                 obj.phase = 2;
-                obj.opt.options.IterThres = 50;
+                obj.opt.options.Algorithm = 'TR';
+                obj.opt.options.IterThres = inf; % Change if needed
                 valid = false;
 
                 while ~valid
@@ -194,9 +194,11 @@ classdef optimizer < handle
                         obj.TrustRegion();
                     end
                     
+                    
                     % Step 3: Validate and perform data association 
                     % Create new arc segments if needed 
-                    obj.map.validate(obj.phase);
+                    obj.map.validate();
+                    
                     % Step 1 is done inside the validation function
                     valid = obj.map.valid_flag;
 
@@ -268,28 +270,29 @@ classdef optimizer < handle
             gnss_pos = lla2enu(obj.gnss.pos,obj.gnss.lla0,'ellipsoid');
             
 
-            figure(1); hold on; grid on; axis equal;
-%             p_est = plot3(P(1,:),P(2,:),P(3,:),'r.');
-%             p_gnss = plot3(gnss_pos(:,1),gnss_pos(:,2),gnss_pos(:,3),'b.');
+%             figure(1); hold on; grid on; axis equal;
+% %             p_est = plot3(P(1,:),P(2,:),P(3,:),'r.');
+% %             p_gnss = plot3(gnss_pos(:,1),gnss_pos(:,2),gnss_pos(:,3),'b.');
+% %             
+% %             for i=1:n
+% %                 left_ = left{i}; right_ = right{i};
+% %                 plot3(left_(1,:),left_(2,:),left_(3,:));
+% %                 plot3(right_(1,:),right_(2,:),right_(3,:));
+% %             end
+%             p_est = plot(P(1,:),P(2,:),'r.');
+%             p_gnss = plot(gnss_pos(:,1),gnss_pos(:,2),'b.');
 %             
 %             for i=1:n
 %                 left_ = left{i}; right_ = right{i};
-%                 plot3(left_(1,:),left_(2,:),left_(3,:));
-%                 plot3(right_(1,:),right_(2,:),right_(3,:));
+%                 plot(left_(1,1),left_(2,1),'cx');
+%                 plot(right_(1,1),right_(2,1),'mx');
 %             end
-            p_est = plot(P(1,:),P(2,:),'r.');
-            p_gnss = plot(gnss_pos(:,1),gnss_pos(:,2),'b.');
-            
-            for i=1:n
-                left_ = left{i}; right_ = right{i};
-                plot(left_(1,1),left_(2,1),'cx');
-                plot(right_(1,1),right_(2,1),'mx');
-            end
-
-            for i=1:size(obj.lane.FactorValidIntvs,1)-1
-                ub = obj.lane.FactorValidIntvs(i,2);
-                plot(obj.states{ub}.P(1),obj.states{ub}.P(2),'g+');
-            end
+% 
+%             for i=1:size(obj.lane.FactorValidIntvs,1)-1
+%                 ub = obj.lane.FactorValidIntvs(i,2);
+%                 plot(obj.states{ub}.P(1),obj.states{ub}.P(2),'g+');
+%             end
+% 
 %             if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
 %                 for i=1:n
 %                     left_ = left{i}; right_ = right{i};
@@ -297,23 +300,73 @@ classdef optimizer < handle
 %                     plot(right_(1,:),right_(2,:));
 %                 end
 %             end
-
-            xlabel('Global X'); ylabel('Global Y');
-            title('Optimized Trajectory 3D Comparison')
-            legend([p_est,p_gnss],'Estimated Trajectory','GNSS Measurements')
+% 
+%             xlabel('Global X'); ylabel('Global Y');
+%             title('Optimized Trajectory 3D Comparison')
+%             legend([p_est,p_gnss],'Estimated Trajectory','GNSS Measurements')
             
             figure(2); 
 %             snap_lla = [obj.snap.lat, obj.snap.lon, zeros(size(obj.snap.lat,1),1)];
             P_lla = enu2lla(P',obj.gnss.lla0,'ellipsoid');
             
-            geoplot(P_lla(:,1),P_lla(:,2),'r.',...
-                    obj.gnss.pos(:,1),obj.gnss.pos(:,2),'b.'); grid on; hold on;
+            % Test with OSM
+            obj.opt.P_lla = P_lla;
+            p_est = geoplot(P_lla(:,1),P_lla(:,2),'r.'); grid on; hold on;
+
+            p_gnss = geoplot(obj.gnss.pos(:,1),obj.gnss.pos(:,2),'b.');
+            
+            if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
+                n = length(obj.map.arc_segments);
+                for i=1:n
+                    m = length(obj.map.arc_segments{i}.kappa);
+                    seg = obj.map.arc_segments{i};
+                    heading = seg.tau0;
+                    SegPoints = [seg.x0;
+                                 seg.y0];
+                    for j=1:m
+                        kappa = seg.kappa(j); L = seg.L(j);
+                        headingPrev = heading;
+                        heading = heading + kappa * L;
+                        headingCurr = heading;
+    
+                        heading_ = linspace(headingPrev,headingCurr,1e3);
+                        addedSegPoints = SegPoints(:,end) + 1/kappa * [sin(heading_) - sin(headingPrev);
+                                                                       -cos(heading_) + cos(headingPrev)];
+                        SegPoints = [SegPoints addedSegPoints];
+                        
+                        lla_node1 = enu2lla([addedSegPoints(1,1),addedSegPoints(2,1),0],obj.gnss.lla0,'ellipsoid');
+                        lla_node2 = enu2lla([addedSegPoints(1,end),addedSegPoints(2,end),0],obj.gnss.lla0,'ellipsoid');
+                        p_node = geoplot(lla_node1(1),lla_node1(2),'co');
+                        geoplot(lla_node2(1),lla_node2(2),'co');
+                    end
+                    
+                    lla_seg = enu2lla([SegPoints' zeros(size(SegPoints,2),1)],obj.gnss.lla0,'ellipsoid');
+                    lla_node3 = enu2lla([SegPoints(1,1),SegPoints(2,1),0],obj.gnss.lla0,'ellipsoid');
+                    lla_node4 = enu2lla([SegPoints(1,end),SegPoints(2,end),0],obj.gnss.lla0,'ellipsoid');
+    
+                    p_lane = geoplot(lla_seg(:,1),lla_seg(:,2),'k-');
+                    p_seg = geoplot(lla_node3(1),lla_node3(2),'ms');
+                    geoplot(lla_node4(1),lla_node4(2),'ms');
+    
+                end
+                geobasemap satellite
+
+                title('Optimized Trajectory Comparison')
+                legend([p_est,p_gnss,p_lane,p_seg,p_node],...
+                       'Optimized Vehicle Trajectory','GNSS Measurements',...
+                       'Continuous Piecewise Arc Spline',...
+                       'Arc Segment Node','Arc Sub-Segment Node')
+            else
+                geobasemap satellite
+
+                title('Optimized Trajectory Comparison')
+                legend([p_est,p_gnss],...
+                       'Optimized Vehicle Trajectory','GNSS Measurements')
+            end
+
 %             geoplot(obj.snap.lat,obj.snap.lon,'c.','MarkerSize',8)
 
-            geobasemap satellite
-
-            title('Optimized Trajectory Comparison')
-            legend('Estimated Trajectory','GNSS Measurements')
+            
 
             figure(3); hold on; grid on;
             plot(obj.t,V(1,:),'r-');
@@ -778,7 +831,7 @@ classdef optimizer < handle
             eta2 = obj.opt.options.TR.eta2;
             gamma1 = obj.opt.options.TR.gamma1;
             gamma2 = obj.opt.options.TR.gamma2;
-
+            
             while true
                 A = jac' * jac; b = -jac' * res; 
                 
@@ -890,7 +943,8 @@ classdef optimizer < handle
             [AS2_res,AS2_jac] = obj.CreateAS2Block();
             
             res = vertcat(Pr_res,MM_res,GNSS_res,WSS_res,AS_res,AS2_res);
-            jac = vertcat(Pr_jac,MM_jac,GNSS_jac,WSS_jac,AS_jac,AS2_jac);            
+            jac = vertcat(Pr_jac,MM_jac,GNSS_jac,WSS_jac,AS_jac,AS2_jac);   
+            obj.opt.jac = jac;
         end
         
         %% Prior Residual and Jacobian
@@ -1207,13 +1261,13 @@ classdef optimizer < handle
                         P = obj.states{j}.P;
                         lane_idx = obj.lane.state_idxs(j);
                         
-                        if obj.phase == 1
-                            max_prev = 1;
-                        elseif obj.phase == 2
-                            max_prev = obj.lane.prev_num;
-                        end
+%                         if obj.phase == 1
+%                             max_prev = 1;
+%                         elseif obj.phase == 2
+%                             max_prev = ;
+%                         end
 
-                        for k=1:max_prev                            
+                        for k=1:obj.lane.prev_num                           
                             leftSubSegIdx = obj.map.assocL(j,k);
                             rightSubSegIdx = obj.map.assocR(j,k);
     
@@ -1515,7 +1569,7 @@ classdef optimizer < handle
         
         %% Arc Spline based Numerical Jacobian Computation Phase 2
         function [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = getASJac(obj,R,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir)
-            eps = 1e-8;
+            eps = 1e-8; eps_kappa = 1e-12; minL = obj.lane.minL;
             anchored_res = obj.getASRes(R,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
             
             r_jac = zeros(1,3); p_jac = zeros(1,3); 
@@ -1535,10 +1589,13 @@ classdef optimizer < handle
             for i=1:3
                 rot_ptb_vec = zeros(3,1);
                 rot_ptb_vec(i) = eps;
-                R_ptb = R * Exp_map(rot_ptb_vec); 
+                R_ptbP = R * Exp_map(rot_ptb_vec); 
+                R_ptbM = R * Exp_map(-rot_ptb_vec);
 
-                res_ptb = obj.getASRes(R_ptb,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
-                r_jac(i) = (res_ptb - anchored_res)/eps;
+                res_ptbP = obj.getASRes(R_ptbP,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
+                res_ptbM = obj.getASRes(R_ptbM,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
+
+                r_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
             end
             r_jac = InvMahalanobis(r_jac,cov);
 
@@ -1547,10 +1604,13 @@ classdef optimizer < handle
             for i=1:3
                 pos_ptb_vec = zeros(3,1);
                 pos_ptb_vec(i) = eps;
-                P_ptb = P + R * pos_ptb_vec;
+                P_ptbP = P + R * pos_ptb_vec;
+                P_ptbM = P + R * (-pos_ptb_vec);
 
-                res_ptb = obj.getASRes(R,P_ptb,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
-                p_jac(i) = (res_ptb - anchored_res)/eps;
+                res_ptbP = obj.getASRes(R,P_ptbP,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
+                res_ptbM = obj.getASRes(R,P_ptbM,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
+
+                p_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
             end
             p_jac = InvMahalanobis(p_jac,cov);
 
@@ -1558,10 +1618,13 @@ classdef optimizer < handle
             for i=1:3
                 initParams_ptb_vec = zeros(1,3);
                 initParams_ptb_vec(i) = eps;
-                initParams_ptb = initParams + initParams_ptb_vec;
+                initParams_ptbP = initParams + initParams_ptb_vec;
+                initParams_ptbM = initParams - initParams_ptb_vec;
 
-                res_ptb = obj.getASRes(R,P,initParams_ptb,kappa,L,SubSegIdx,lane_idx,k,dir);
-                param_jac(i) = (res_ptb - anchored_res)/eps;
+                res_ptbP = obj.getASRes(R,P,initParams_ptbP,kappa,L,SubSegIdx,lane_idx,k,dir);
+                res_ptbM = obj.getASRes(R,P,initParams_ptbM,kappa,L,SubSegIdx,lane_idx,k,dir);
+
+                param_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
             end
             param_jac = InvMahalanobis(param_jac,cov);
 
@@ -1570,11 +1633,14 @@ classdef optimizer < handle
                 % For sub-segment parameter perturbation, variables "after"
                 % the target sub-segment index are not used!
                 kappa_ptb_vec = zeros(1,length(kappa));
-                kappa_ptb_vec(i) = eps;
-                kappa_ptb = kappa + kappa_ptb_vec;
+                kappa_ptb_vec(i) = eps_kappa;
+                kappa_ptbP = kappa + kappa_ptb_vec;
+                kappa_ptbM = kappa - kappa_ptb_vec;
 
-                res_ptb = obj.getASRes(R,P,initParams,kappa_ptb,L,SubSegIdx,lane_idx,k,dir);
-                kappa_jac(i) = (res_ptb - anchored_res)/eps;
+                res_ptbP = obj.getASRes(R,P,initParams,kappa_ptbP,L,SubSegIdx,lane_idx,k,dir);
+                res_ptbM = obj.getASRes(R,P,initParams,kappa_ptbM,L,SubSegIdx,lane_idx,k,dir);
+
+                kappa_jac(i) = (res_ptbP - res_ptbM)/(2*eps_kappa);
             end
             kappa_jac = InvMahalanobis(kappa_jac,cov);
 
@@ -1585,10 +1651,13 @@ classdef optimizer < handle
 
                 % L positive constraint
                 % actual optimization variable is sqrt(L)
-                L_ptb = (L.^(1/2) + L_ptb_vec).^2;
+                L_ptbP = ((L - minL).^(1/2) + L_ptb_vec).^2 + minL;
+                L_ptbM = ((L - minL).^(1/2) - L_ptb_vec).^2 + minL;
 
-                res_ptb = obj.getASRes(R,P,initParams,kappa,L_ptb,SubSegIdx,lane_idx,k,dir);
-                L_jac(i) = (res_ptb - anchored_res)/eps;
+                res_ptbP = obj.getASRes(R,P,initParams,kappa,L_ptbP,SubSegIdx,lane_idx,k,dir);
+                res_ptbM = obj.getASRes(R,P,initParams,kappa,L_ptbM,SubSegIdx,lane_idx,k,dir);
+
+                L_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
             end
             L_jac = InvMahalanobis(L_jac,cov);
             
@@ -1634,7 +1703,7 @@ classdef optimizer < handle
 
         %% Arc Spline based Numerical Jacobian Computation 2 Phase 2
         function [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = getAS2Jac(obj,R,P,initParams,kappa,L,lane_idx,dir,SubSegIdx)
-            eps = 1e-6;
+            eps = 1e-6; eps_kappa = 1e-12; minL = obj.lane.minL;
             anchored_res = obj.getAS2Res(R,P,initParams,kappa,L,lane_idx,dir,SubSegIdx);
             
             r_jac = zeros(2,3); p_jac = zeros(2,3); 
@@ -1655,10 +1724,13 @@ classdef optimizer < handle
             for i=1:3
                 rot_ptb_vec = zeros(3,1);
                 rot_ptb_vec(i) = eps;
-                R_ptb = R * Exp_map(rot_ptb_vec); 
+                R_ptbP = R * Exp_map(rot_ptb_vec); 
+                R_ptbM = R * Exp_map(-rot_ptb_vec);
 
-                res_ptb = obj.getAS2Res(R_ptb,P,initParams,kappa,L,lane_idx,dir,SubSegIdx);
-                r_jac(:,i) = (res_ptb - anchored_res)/eps;
+                res_ptbP = obj.getAS2Res(R_ptbP,P,initParams,kappa,L,lane_idx,dir,SubSegIdx);
+                res_ptbM = obj.getAS2Res(R_ptbM,P,initParams,kappa,L,lane_idx,dir,SubSegIdx);
+
+                r_jac(:,i) = (res_ptbP - res_ptbM)/(2*eps);
             end
             r_jac = InvMahalanobis(r_jac,cov);
 
@@ -1667,10 +1739,13 @@ classdef optimizer < handle
             for i=1:3
                 pos_ptb_vec = zeros(3,1);
                 pos_ptb_vec(i) = eps;
-                P_ptb = P + R * pos_ptb_vec;
+                P_ptbP = P + R * pos_ptb_vec;
+                P_ptbM = P + R * (-pos_ptb_vec);
+                
+                res_ptbP = obj.getAS2Res(R,P_ptbP,initParams,kappa,L,lane_idx,dir,SubSegIdx);
+                res_ptbM = obj.getAS2Res(R,P_ptbM,initParams,kappa,L,lane_idx,dir,SubSegIdx);
 
-                res_ptb = obj.getAS2Res(R,P_ptb,initParams,kappa,L,lane_idx,dir,SubSegIdx);
-                p_jac(:,i) = (res_ptb - anchored_res)/eps;
+                p_jac(:,i) = (res_ptbP - res_ptbM)/(2*eps);
             end
             p_jac = InvMahalanobis(p_jac,cov);
 
@@ -1678,34 +1753,46 @@ classdef optimizer < handle
             for i=1:3
                 initParams_ptb_vec = zeros(1,3);
                 initParams_ptb_vec(i) = eps;
-                initParams_ptb = initParams + initParams_ptb_vec;
+                initParams_ptbP = initParams + initParams_ptb_vec;
+                initParams_ptbM = initParams - initParams_ptb_vec;
 
-                res_ptb = obj.getAS2Res(R,P,initParams_ptb,kappa,L,lane_idx,dir,SubSegIdx);
-                param_jac(:,i) = (res_ptb - anchored_res)/eps;
+                res_ptbP = obj.getAS2Res(R,P,initParams_ptbP,kappa,L,lane_idx,dir,SubSegIdx);
+                res_ptbM = obj.getAS2Res(R,P,initParams_ptbM,kappa,L,lane_idx,dir,SubSegIdx);
+
+                param_jac(:,i) = (res_ptbP - res_ptbM)/(2*eps);
             end
             param_jac = InvMahalanobis(param_jac,cov);
 
             % 4: Perturbation to Sub-Segment Params (kappa)
             for i=1:length(kappa)
                 kappa_ptb_vec = zeros(1,length(kappa));
-                kappa_ptb_vec(i) = eps;
-                kappa_ptb = kappa + kappa_ptb_vec;
+                kappa_ptb_vec(i) = eps_kappa;
+                kappa_ptbP = kappa + kappa_ptb_vec;
+                kappa_ptbM = kappa - kappa_ptb_vec;
 
-                res_ptb = obj.getAS2Res(R,P,initParams,kappa_ptb,L,lane_idx,dir,SubSegIdx);
-                kappa_jac(:,i) = (res_ptb - anchored_res)/eps;
+                res_ptbP = obj.getAS2Res(R,P,initParams,kappa_ptbP,L,lane_idx,dir,SubSegIdx);
+                res_ptbM = obj.getAS2Res(R,P,initParams,kappa_ptbM,L,lane_idx,dir,SubSegIdx);
+
+                kappa_jac(:,i) = (res_ptbP - res_ptbM)/(2*eps_kappa);
             end
             kappa_jac = InvMahalanobis(kappa_jac,cov);
-
+            
+            % May need to use different epsilon for every subseg to prevent
+            % matrix singularity
             % 5: Perturbation to Sub-Segment Params (L)
+            eps_L = 1e-7 * linspace(1,length(L));
             for i=1:length(L)
                 L_ptb_vec = zeros(1,length(L));
-                L_ptb_vec(i) = eps;
+                L_ptb_vec(i) = eps_L(i);
                 % L positive constraint
                 % actual optimization variable is sqrt(L)
-                L_ptb = (L.^(1/2) + L_ptb_vec).^2;
+                L_ptbP = ((L - minL).^(1/2) + L_ptb_vec).^2 + minL;
+                L_ptbM = ((L - minL).^(1/2) - L_ptb_vec).^2 + minL;                
 
-                res_ptb = obj.getAS2Res(R,P,initParams,kappa,L_ptb,lane_idx,dir,SubSegIdx);
-                L_jac(:,i) = (res_ptb - anchored_res)/eps;
+                res_ptbP = obj.getAS2Res(R,P,initParams,kappa,L_ptbP,lane_idx,dir,SubSegIdx);
+                res_ptbM = obj.getAS2Res(R,P,initParams,kappa,L_ptbM,lane_idx,dir,SubSegIdx);
+
+                L_jac(:,i) = (res_ptbP - res_ptbM)/(2*eps_L(i));
             end
             L_jac = InvMahalanobis(L_jac,cov);
             

@@ -1,7 +1,47 @@
 classdef ArcMap < handle
     %ARCMAP - Arc Spline based lane model for SNLS optimization
     % 
-    %   Detailed explanation goes here
+    %   When optimization mode is updated to '2-phase' in optimizer.m, this
+    %   module is automatically activated. Below is the overall framework 
+    %   of this module.
+    %   
+    %   Input: 
+    %   1. Optimized vehicle state (INS + GNSS + WSS Fusion)
+    %
+    %   2. Lane Measurement Information
+    %
+    %   ===================================================================
+    %   Step 1. Compute lane points using lane measurements and optimized
+    %           vehicle trajectory. Perform point clustering that should be
+    %           on the same lane.
+    %   
+    %   Step 2. Using divide & conquer method, find intervals for piecewise
+    %           linear approximation for point cluster obtained at step 1.
+    %           Then, merge linear approximations into arcs with some fixed
+    %           error threshold.
+    %           
+    %   Step 3. Using ArcFit.m, perform NLS optimization to find optimal
+    %           parameter values for the given number of arc parameters in
+    %           step 2.
+    %   
+    %   [From here, Mixed Usage with optimizer.m]
+    % 
+    %   Step 4. Use the results from step 3 as the initial arc spline map
+    %           and perform optimization using previewed lane measurements
+    %           in optimizer.m
+    % 
+    %   Step 5. Every iteration, perform data association(which lane 
+    %           measurement belongs to which Sub-segment). 
+    %
+    %   Step 6. Fully converge with fixed number of Sub-segments. Validate
+    %           current optimization results with lane measurement
+    %           reliability data. 
+    % 
+    %   Step 7. If invalid, add new segment to the current map and repeat
+    %           steps 4 ~ 6. If valid, end optimization.
+    %   ===================================================================
+    %   
+    %   Implemented by JinHwan Jeon, 2022
 
     properties (Access = public)
         states
@@ -19,7 +59,6 @@ classdef ArcMap < handle
         max_err
         valid_flag = false
         dummy = struct() % Dummy variable for debugging
-        initFit
     end
     
     %% Public Methods
@@ -37,20 +76,16 @@ classdef ArcMap < handle
             
             % Initial Segment Parametrization
             obj.InitSegmentParametrization();
-        end
-        
-        %% Debugging
-        function obj = InitFullParametrize(obj)
+            
             % Perform Arc Spline based lane fitting with initial
             % parametrization data
             for i=1:length(obj.arc_segments)
-                obj.initFit = ArcFit(obj.arc_segments{i},obj.segments{i}(1:2,:),i);    
-                obj.initFit.optimize();
-                % retrieve params after optimization for each segment
-                obj.arc_segments{i} = obj.initFit.getParams();
+                initFit = ArcFit(obj.arc_segments{i},obj.segments{i}(1:2,:),i);    
+                initFit.optimize();
+                obj.arc_segments{i} = initFit.getParams();
             end
             obj.DataAssociation(); 
-        end
+        end    
 
         %% Map Update for 
         function obj = update(obj,states,arc_delta_params)
@@ -66,9 +101,10 @@ classdef ArcMap < handle
             
             % Re-initialize variables
             % Need to be careful if number of arc segments is changed
+            minL = obj.lane.minL;
             for i=1:length(obj.arc_segments)                
                 obj.arc_segments{i}.kappa = obj.arc_segments{i}.kappa + arc_delta_params{i}.kappa;
-                obj.arc_segments{i}.L = ((obj.arc_segments{i}.L).^(1/2) + arc_delta_params{i}.L).^2;
+                obj.arc_segments{i}.L = ((obj.arc_segments{i}.L - minL).^(1/2) + arc_delta_params{i}.L).^2 + minL;
                 obj.arc_segments{i}.x0 = obj.arc_segments{i}.x0 + arc_delta_params{i}.x0;
                 obj.arc_segments{i}.y0 = obj.arc_segments{i}.y0 + arc_delta_params{i}.y0;
                 obj.arc_segments{i}.tau0 = obj.arc_segments{i}.tau0 + arc_delta_params{i}.tau0;
@@ -78,62 +114,11 @@ classdef ArcMap < handle
             % Perform data association with updated variables
             % Update data association for remaining preview distance 
             % measurements iteratively
-            obj.DataAssociation(); 
-            
-            % change if this is too unstable!
-        end
-
-        %% Map Visualization (2D Segmentwise Point Map)
-        function obj = visualize2DMap(obj)
-            % Alter this function for debugging purpose
-            % Current : Visualize initial arc segmentation results
-
-            figure(1); hold on; grid on; axis equal;
-            
-            n = length(obj.states);
-            
-            for i=1:n
-                P = obj.states{i}.P;
-                p_est = plot(P(1),P(2),'r.');
-            end
-
-            n = length(obj.arc_segments);
-            for i=1:n
-                m = length(obj.arc_segments{i}.kappa);
-                seg = obj.arc_segments{i};
-                heading = seg.tau0;
-                SegPoints = [seg.x0;
-                             seg.y0];
-                for j=1:m
-                    kappa = seg.kappa(j); L = seg.L(j);
-                    headingPrev = heading;
-                    heading = heading + kappa * L;
-                    headingCurr = heading;
-
-                    heading_ = linspace(headingPrev,headingCurr,1e3);
-                    addedSegPoints = SegPoints(:,end) + 1/kappa * [sin(heading_) - sin(headingPrev);
-                                                                   -cos(heading_) + cos(headingPrev)];
-                    SegPoints = [SegPoints addedSegPoints];
-                    
-                    p_node = plot(addedSegPoints(1,1),addedSegPoints(2,1),'co');
-                    plot(addedSegPoints(1,end),addedSegPoints(2,end),'co');
-                end
-                p_lane = plot(SegPoints(1,:),SegPoints(2,:),'k-');
-                p_seg = plot(SegPoints(1,1),SegPoints(2,1),'ms');
-                plot(SegPoints(1,end),SegPoints(2,end),'ms');
-
-            end
-           
-            xlabel('Global X(m)'); ylabel('Global Y(m)');
-            title('Optimized Vehicle Trajectory and Lane Segments');
-            legend([p_est,p_lane,p_node,p_seg], ...
-                   'Optimized Vehicle Trajectory', ...
-                   'Optimized Arc Spline based ego-lane', ...
-                   'Lane Sub-segment','Lane Segment');
+            obj.DataAssociation();            
         end
         
         %% Validate Current Map after convergence
-        function obj = validate(obj,phase)
+        function obj = validate(obj)
             % For each segment, find the most invalid subsegment
             n = size(obj.lane.FactorValidIntvs,1);
             
@@ -146,12 +131,6 @@ classdef ArcMap < handle
                 obj.max_err = [obj.max_err {zeros(1,length(obj.arc_segments{i}.kappa))}];
             end
             
-            if phase == 1
-                prev_max = 1;
-            elseif phase == 2
-                prev_max = obj.lane.prev_num;
-            end
-
             for i=1:n
                 lb = obj.lane.FactorValidIntvs(i,1);
                 ub = obj.lane.FactorValidIntvs(i,2);
@@ -160,7 +139,7 @@ classdef ArcMap < handle
                 rightSegIdx = obj.segment_info(2,i);
 
                 for j=lb:ub
-                    for k=1:prev_max
+                    for k=1:obj.lane.prev_num
                         leftSubSegIdx = obj.assocL(j,k);
                         rightSubSegIdx = obj.assocR(j,k);
 
@@ -205,10 +184,86 @@ classdef ArcMap < handle
             disp('=========================================================')
             
             % Perform Data Association for next optimization 
-            obj.DataAssociation0();
             obj.DataAssociation();
         end
-       
+
+        %% Map Visualization (2D Segmentwise Point Map)
+        function obj = visualize2DMap(obj)
+            % Visualize Parametrization Results            
+                
+            obj.summary();
+
+
+            figure(1); hold on; grid on; axis equal;
+            
+            n = length(obj.states);
+            
+            for i=1:n
+                P = obj.states{i}.P;
+                p_est = plot(P(1),P(2),'r.');
+            end
+
+            n = length(obj.arc_segments);
+            for i=1:n
+                m = length(obj.arc_segments{i}.kappa);
+                seg = obj.arc_segments{i};
+                heading = seg.tau0;
+                SegPoints = [seg.x0;
+                             seg.y0];
+                for j=1:m
+                    kappa = seg.kappa(j); L = seg.L(j);
+                    headingPrev = heading;
+                    heading = heading + kappa * L;
+                    headingCurr = heading;
+
+                    heading_ = linspace(headingPrev,headingCurr,1e3);
+                    addedSegPoints = SegPoints(:,end) + 1/kappa * [sin(heading_) - sin(headingPrev);
+                                                                   -cos(heading_) + cos(headingPrev)];
+                    SegPoints = [SegPoints addedSegPoints];
+                    
+                    p_node = plot(addedSegPoints(1,1),addedSegPoints(2,1),'co');
+                    plot(addedSegPoints(1,end),addedSegPoints(2,end),'co');
+                end
+                p_lane = plot(SegPoints(1,:),SegPoints(2,:),'k-');
+                p_seg = plot(SegPoints(1,1),SegPoints(2,1),'ms');
+                plot(SegPoints(1,end),SegPoints(2,end),'ms');
+
+            end
+           
+            xlabel('Global X(m)'); ylabel('Global Y(m)');
+            title('Optimized Vehicle Trajectory and Lane Segments');
+            legend([p_est,p_lane,p_node,p_seg], ...
+                   'Optimized Vehicle Trajectory', ...
+                   'Optimized Arc Spline based ego-lane', ...
+                   'Lane Sub-segment','Lane Segment');            
+            
+        end
+        
+        %% Display Optimization Summary
+        function summary(obj)
+            disp('[Summary of Optimized Arc Segments and Subsegments]')
+            
+            numSubSeg = 0;
+            for i=1:length(obj.arc_segments)
+                seg = obj.arc_segments{i};
+                numSubSeg = numSubSeg + length(seg.L);
+                fprintf('\n')
+                disp(['Segment No. ',num2str(i),': ',num2str(length(seg.L)),' Subsegments'])
+                
+                for j=1:length(seg.L)
+                    disp(['   Subsegment No. ',num2str(j), ...
+                          ': L = ',num2str(seg.L(j),3), ...
+                          'm, R = ',num2str(abs(1/seg.kappa(j)),3),'m'])
+                end
+                fprintf('\n')
+                disp(['   Segment Length: ',num2str(sum(seg.L),3),'m'])
+            end
+            fprintf('\n')
+            disp('[Summary]')
+            disp(['Number of Segments: ',num2str(length(obj.arc_segments)), ...
+                  ', Number of Subsegments: ',num2str(numSubSeg)])
+        end   
+
     end
     
     %% Private Methods
@@ -432,41 +487,22 @@ classdef ArcMap < handle
                 end
             end
         end
-
+        
         %% Data Association for remaining preview
         function obj = DataAssociation(obj)
             % Data Association with current vehicle state and arc-spline
             % parameters. After each step in optimization, vehicle states
             % and arc parameters should be updated before re-association
             %
-            % Create arc segment node points before data association
+            % Pre-compute arc segment node/center points 
             
             n = length(obj.arc_segments);
-            for i=1:n
-                m = length(obj.arc_segments{i}.kappa);
+            for i=1:n                
                 seg = obj.arc_segments{i};
-                heading = seg.tau0;
-                segPoints = [seg.x0;
-                             seg.y0];
-                for j=1:m            
-                    % Propagate and save subsegment node points
-                    kappa = seg.kappa(j); L = seg.L(j);
-                    headingPrev = heading;
-                    heading = heading + kappa * L;
-                    headingCurr = heading;
-                    segPoints = [segPoints segPoints(:,end) + 1/kappa * [sin(headingCurr) - sin(headingPrev);
-                                                                        -cos(headingCurr) + cos(headingPrev)]];
-                    
-                    % Propagate and save subsegment arc center points
-                    if j == 1
-                        cPoints = [seg.x0 - 1/kappa * sin(headingPrev);
-                                   seg.y0 + 1/kappa * cos(headingPrev)];
-                    else
-                        cPoints = [cPoints cPoints(:,end) + (1/seg.kappa(j-1) - 1/seg.kappa(j)) * [sin(headingPrev);-cos(headingPrev)]];
-                    end
-                end
-                obj.arc_nodes = [obj.arc_nodes {segPoints}];
-                obj.arc_centers = [obj.arc_centers {cPoints}];
+                initParams = [seg.x0, seg.y0, seg.tau0];
+                kappa = seg.kappa; L = seg.L;                
+                obj.arc_nodes = [obj.arc_nodes {obj.propNode(initParams,kappa,L)}];
+                obj.arc_centers = [obj.arc_centers {obj.propCenter(initParams,kappa,L)}];
             end
 
             % Data Association
@@ -488,13 +524,22 @@ classdef ArcMap < handle
                     lane_idx = obj.lane.state_idxs(j);                    
                     R = obj.states{j}.R;
                     P = obj.states{j}.P;
+
                     % Filter Valid state idx
                     if obj.lane.prob(lane_idx,2) > obj.lane_prob_thres && obj.lane.prob(lane_idx,3) > obj.lane_prob_thres
-                        for k=2:obj.lane.prev_num
-                            
+                        % Use preview distance measurement only for
+                        % reliable measurements
+                        for k=1:obj.lane.prev_num    
+                            % If std value of previewed measurement is too
+                            % large(abnormal values), reject measurement
+                            % even if the lane probability is measured to
+                            % be valid. 
+                            % 
+                            % This is to prevent impossible lane
+                            % measurements from 
                             if obj.lane.lystd(lane_idx,k) < 3.4 || obj.lane.rystd(lane_idx,k) < 3.4
                                 rel_pos = [10*(k-1);0;0];
-                                pos = P + R * rel_pos;
+                                pos = P + R * rel_pos;                                
                                 
                                 segIdxL = obj.match(pos,R,leftSegIdx);
                                 segIdxR = obj.match(pos,R,rightSegIdx);
@@ -503,7 +548,16 @@ classdef ArcMap < handle
                                 obj.assocR(j,k) = segIdxR;                                
                             end                            
                         end
+                    else
+                        % Perform data association only for 0m preview
+                        % measurement
+                        segIdxL = obj.match(P,R,leftSegIdx);
+                        segIdxR = obj.match(P,R,rightSegIdx);
+                        obj.assocL(j,1) = segIdxL;
+                        obj.assocR(j,1) = segIdxR;
                     end
+
+                    % Check for any abnormal zeros                    
                 end
             end
         end
@@ -605,11 +659,11 @@ classdef ArcMap < handle
             end
             % Update stateIdxs for segments
             [~,c] = find(obj.segment_info == SegIdx);
-            stateIntvs = obj.lane.FactorValidIntvs(c(1):c(end),1:2);
-            seg.stateIdxs = zeros(1,size(seg.bnds,1));
-            for i=1:size(seg.bnds,1)
-                seg.stateIdxs(i) = obj.findStateIdx(stateIntvs,seg.bnds(i,2));
-            end
+%             stateIntvs = obj.lane.FactorValidIntvs(c(1):c(end),1:2);
+%             seg.stateIdxs = zeros(1,size(seg.bnds,1));
+%             for i=1:size(seg.bnds,1)
+%                 seg.stateIdxs(i) = obj.findStateIdx(stateIntvs,seg.bnds(i,2));
+%             end
 
             % Update segment info
             obj.arc_segments{SegIdx} = seg;
@@ -621,11 +675,11 @@ classdef ArcMap < handle
         function SubSegIdx = match(obj,pos,att,SegIdx)
             % May need to fix
             % Matching is performed in 2D manner
-            segPoints = obj.arc_nodes{SegIdx};
-            segCenters = obj.arc_centers{SegIdx};
-            seg = obj.arc_segments{SegIdx};
+            segNodes = obj.arc_nodes{SegIdx};
+%             segCenters = obj.arc_centers{SegIdx};
+%             seg = obj.arc_segments{SegIdx};
 
-            n = size(segPoints,2);
+            n = size(segNodes,2);
             
             rpy = dcm2rpy(att); psi = rpy(3);
             xv = pos(1); yv = pos(2);
@@ -639,7 +693,7 @@ classdef ArcMap < handle
                 % between the 2 node points, meaning that matching is not
                 % appropriate.
 
-                P1 = segPoints(:,i); P2 = segPoints(:,i+1);
+                P1 = segNodes(:,i); P2 = segNodes(:,i+1);
                 dP = (P1 - P2)' * (P1 - P2);
                 
                 x1 = P1(1); y1 = P1(2); 
@@ -654,9 +708,8 @@ classdef ArcMap < handle
                 [~,idx] = max([dP,d1,d2]);
                 if idx == 1
                     % Matching Success
-                    % Compute arc center to vehicle distance
-                    dist = abs(sqrt(([xv;yv] - segCenters(:,i))' * ([xv;yv] - segCenters(:,i))) - abs(1/seg.kappa(i)));
-                    
+                    % Compute vehicle to intersection point distance
+                    dist = (xv - x_intersect)^2 + (yv - y_intersect)^2; 
                     cand = [cand [i;dist]];
                 end
             end
@@ -664,33 +717,13 @@ classdef ArcMap < handle
             if ~isempty(cand)
                 % If match candidate exists, pick the one with smallest
                 % matching error as the correct match
+                % Vehicle to intersection point distance is small if they
+                % are correctly matched
                 [~,idx] = min(cand(2,:));
                 SubSegIdx = cand(1,idx);
             else
                 SubSegIdx = 0;
             end
-        end
-        
-        %% Display Optimization Summary
-        function summary(obj)
-            disp('[Summary of Optimized Arc Segments and Subsegments]')
-            
-            numSubSeg = 0;
-            for i=1:length(obj.arc_segments)
-                seg = obj.arc_segments{i};
-                numSubSeg = numSubSeg + length(seg.L);
-
-                disp(['Segment No. ',num2str(i),': ',num2str(length(seg.L)),' Subsegments'])
-                
-                for j=1:length(seg.L)
-                    disp(['   Subsegment No. ',num2str(j), ...
-                          ': L = ',num2str(seg.L(j),3), ...
-                          'm, R = ',num2str(abs(1/seg.kappa(j)),3),'m'])
-                end
-                disp(['Segment Length: ',num2str(sum(seg.L),3),'m'])
-            end
-            disp(['Number of Segments: ',num2str(length(obj.arc_segments)), ...
-                  'Number of Subsegments: ',num2str(numSubSeg)])
         end
 
     end
@@ -726,14 +759,40 @@ classdef ArcMap < handle
             idx = min(c);
         end
         
-         %% Find state_idx from segment bnds
-         function state_idx = findStateIdx(Intvs,num)
+        %% Find state_idx from segment bnds
+        function state_idx = findStateIdx(Intvs,num)
             augIdxs = [];            
             for i=1:size(Intvs,1)
                 augIdxs = [augIdxs Intvs(i,1):Intvs(i,2)];
             end
             state_idx = augIdxs(num);
         end
+        
+        %% Propagate Arc Center Points
+        function centerPoints = propCenter(initParams,kappa,L)
+            x0 = initParams(1); y0 = initParams(2); heading = initParams(3);
+            
+            for i=1:length(kappa)
+                if i == 1
+                    centerPoints = [x0 - 1/kappa(i) * sin(heading); y0 + 1/kappa(i) * cos(heading)];
+                else
+                    centerPoints = [centerPoints centerPoints(:,end) + (1/kappa(i-1) - 1/kappa(i)) * [sin(heading);-cos(heading)]];
+                end
+                heading = heading + kappa(i) * L(i);
+            end
+        end
+
+        %% Propagate Arc Node Points
+        function nodePoints = propNode(initParams,kappa,L)
+            x0 = initParams(1); y0 = initParams(2); heading = initParams(3);            
+            nodePoints = [x0; y0];
+            
+            for i=1:length(kappa)
+                nodePoints = [nodePoints nodePoints(:,end) + 1/kappa(i) * [sin(heading + kappa(i) * L(i)) - sin(heading);
+                                                                           -cos(heading + kappa(i) * L(i)) + cos(heading)]];
+                heading = heading + kappa(i) * L(i);
+            end
+        end 
 
     end
 end
