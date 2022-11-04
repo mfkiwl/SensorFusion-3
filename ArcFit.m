@@ -21,6 +21,7 @@ classdef ArcFit < handle
         points
         valid = false
         assoc
+        precomp_jac = struct()
         validity
         options = struct()
         opt = struct()
@@ -140,6 +141,7 @@ classdef ArcFit < handle
                 
                 dummy_params = obj.params;
                 dummy_assoc = obj.assoc;
+                dummy_jac = obj.precomp_jac;
 
                 if ~isempty(find(isnan(h_gn),1)) || ~isempty(find(isnan(h_gd),1))
                     obj.opt.jac = jac;
@@ -166,6 +168,7 @@ classdef ArcFit < handle
                     % Current Step Rejected, using dummy variables
                     obj.params = dummy_params;   
                     obj.assoc = dummy_assoc;
+                    obj.precomp_jac = dummy_jac;
                     string = 'Rejected';
                     flag = false;
                 end
@@ -270,42 +273,49 @@ classdef ArcFit < handle
             init_jac = zeros(1,3);
             kappa_jac = zeros(1,SegIdx);
             L_jac = zeros(1,SegIdx);
-            % 1: Perturbation of initial Parameters
-            for i=1:3
-                initParams_ptb_vec = zeros(1,3);
-                initParams_ptb_vec(i) = eps;
-                initParams_ptbP = initParams + initParams_ptb_vec;
-                initParams_ptbM = initParams - initParams_ptb_vec;
-                res_ptbP = obj.MEres(initParams_ptbP,kappa,L,Point);
-                res_ptbM = obj.MEres(initParams_ptbM,kappa,L,Point);
-                init_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
-            end
-            init_jac = InvMahalanobis(init_jac,cov);
+%             % 1: Perturbation of initial Parameters
+%             for i=1:3
+%                 initParams_ptb_vec = zeros(1,3);
+%                 initParams_ptb_vec(i) = eps;
+%                 initParams_ptbP = initParams + initParams_ptb_vec;
+% %                 initParams_ptbM = initParams - initParams_ptb_vec;
+%                 res_ptbP = obj.MEres(initParams_ptbP,kappa,L,Point);
+% %                 res_ptbM = obj.MEres(initParams_ptbM,kappa,L,Point);
+% %                 init_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
+%                 init_jac(i) = (res_ptbP - anchored_res)/eps;
+%             end
+%             init_jac = InvMahalanobis(init_jac,cov);
+% 
+%             % 2: Perturbation of kappa
+%             for i=1:SegIdx
+%                 kappa_ptb_vec = zeros(1,SegIdx);
+%                 kappa_ptb_vec(i) = eps_kappa;
+%                 kappa_ptbP = kappa + kappa_ptb_vec;
+% %                 kappa_ptbM = kappa - kappa_ptb_vec;
+%                 res_ptbP = obj.MEres(initParams,kappa_ptbP,L,Point);
+% %                 res_ptbM = obj.MEres(initParams,kappa_ptbM,L,Point);
+% %                 kappa_jac(i) = (res_ptbP - res_ptbM)/(2*eps_kappa);
+%                 kappa_jac(i) = (res_ptbP - anchored_res)/eps_kappa;
+%             end
+%             kappa_jac = InvMahalanobis(kappa_jac,cov);
+%             
+%             % 3 Perturbation of L
+%             for i=1:SegIdx
+%                 L_ptb_vec = zeros(1,SegIdx);
+%                 L_ptb_vec(i) = eps;
+%                 L_ptbP = ((L - minL).^(1/2) + L_ptb_vec).^2 + minL;
+% %                 L_ptbM = ((L - minL).^(1/2) - L_ptb_vec).^2 + minL;
+%                 res_ptbP = obj.MEres(initParams,kappa,L_ptbP,Point);
+% %                 res_ptbM = obj.MEres(initParams,kappa,L_ptbM,Point);
+% %                 L_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
+%                 L_jac(i) = (res_ptbP - anchored_res)/eps;
+%             end
+%             L_jac = InvMahalanobis(L_jac,cov);
 
-            % 2: Perturbation of kappa
-            for i=1:SegIdx
-                kappa_ptb_vec = zeros(1,SegIdx);
-                kappa_ptb_vec(i) = eps_kappa;
-                kappa_ptbP = kappa + kappa_ptb_vec;
-                kappa_ptbM = kappa - kappa_ptb_vec;
-                res_ptbP = obj.MEres(initParams,kappa_ptbP,L,Point);
-                res_ptbM = obj.MEres(initParams,kappa_ptbM,L,Point);
-                kappa_jac(i) = (res_ptbP - res_ptbM)/(2*eps_kappa);
-            end
-            kappa_jac = InvMahalanobis(kappa_jac,cov);
+            % Algebraic Representation for fast jacobian computation
+            xd = Point(1); yd = Point(2);
+                        
             
-            % 3 Perturbation of L
-            for i=1:SegIdx
-                L_ptb_vec = zeros(1,SegIdx);
-                L_ptb_vec(i) = eps;
-                L_ptbP = ((L - minL).^(1/2) + L_ptb_vec).^2 + minL;
-                L_ptbM = ((L - minL).^(1/2) - L_ptb_vec).^2 + minL;
-                res_ptbP = obj.MEres(initParams,kappa,L_ptbP,Point);
-                res_ptbM = obj.MEres(initParams,kappa,L_ptbM,Point);
-                L_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
-            end
-            L_jac = InvMahalanobis(L_jac,cov);
-
             anchored_res = InvMahalanobis(anchored_res,cov);
         end
         
@@ -358,10 +368,11 @@ classdef ArcFit < handle
                     initParams_ptb_vec = zeros(1,3);
                     initParams_ptb_vec(i) = eps;
                     initParams_ptbP = initParams + initParams_ptb_vec;
-                    initParams_ptbM = initParams - initParams_ptb_vec;
+%                     initParams_ptbM = initParams - initParams_ptb_vec;
                     res_ptbP = obj.AMres(initParams_ptbP,kappa,L,flag);
-                    res_ptbM = obj.AMres(initParams_ptbM,kappa,L,flag);
-                    init_jac(:,i) = (res_ptbP - res_ptbM)/(2*eps);
+%                     res_ptbM = obj.AMres(initParams_ptbM,kappa,L,flag);
+%                     init_jac(:,i) = (res_ptbP - res_ptbM)/(2*eps);
+                    init_jac(:,i) = (res_ptbP - anchored_res)/eps;
                 end
                 init_jac = InvMahalanobis(init_jac,cov);
                 anchored_res = InvMahalanobis(anchored_res,cov);
@@ -380,10 +391,11 @@ classdef ArcFit < handle
                     initParams_ptb_vec = zeros(1,3);
                     initParams_ptb_vec(i) = eps;
                     initParams_ptbP = initParams + initParams_ptb_vec;
-                    initParams_ptbM = initParams - initParams_ptb_vec;
+%                     initParams_ptbM = initParams - initParams_ptb_vec;
                     res_ptbP = obj.AMres(initParams_ptbP,kappa,L,flag);
-                    res_ptbM = obj.AMres(initParams_ptbM,kappa,L,flag);
-                    init_jac(:,i) = (res_ptbP - res_ptbM)/(2*eps);
+%                     res_ptbM = obj.AMres(initParams_ptbM,kappa,L,flag);
+%                     init_jac(:,i) = (res_ptbP - res_ptbM)/(2*eps);
+                    init_jac(:,i) = (res_ptbP - anchored_res)/eps;
                 end
                 init_jac = InvMahalanobis(init_jac,cov);
 
@@ -391,10 +403,11 @@ classdef ArcFit < handle
                     kappa_ptb_vec = zeros(1,length(kappa));
                     kappa_ptb_vec(i) = eps_kappa;
                     kappa_ptbP = kappa + kappa_ptb_vec;
-                    kappa_ptbM = kappa - kappa_ptb_vec;
+%                     kappa_ptbM = kappa - kappa_ptb_vec;
                     res_ptbP = obj.AMres(initParams,kappa_ptbP,L,flag);
-                    res_ptbM = obj.AMres(initParams,kappa_ptbM,L,flag);
-                    kappa_jac(:,i) = (res_ptbP - res_ptbM)/(2*eps_kappa);
+%                     res_ptbM = obj.AMres(initParams,kappa_ptbM,L,flag);
+%                     kappa_jac(:,i) = (res_ptbP - res_ptbM)/(2*eps_kappa);
+                    kappa_jac(:,i) = (res_ptbP - anchored_res)/eps_kappa;
                 end
                 kappa_jac = InvMahalanobis(kappa_jac,cov);
                 
@@ -405,10 +418,11 @@ classdef ArcFit < handle
                     L_ptb_vec = zeros(1,length(L));
                     L_ptb_vec(i) = eps2(i);
                     L_ptbP = ((L - minL).^(1/2) + L_ptb_vec).^2 + minL;
-                    L_ptbM = ((L - minL).^(1/2) - L_ptb_vec).^2 + minL;
+%                     L_ptbM = ((L - minL).^(1/2) - L_ptb_vec).^2 + minL;
                     res_ptbP = obj.AMres(initParams,kappa,L_ptbP,flag);
-                    res_ptbM = obj.AMres(initParams,kappa,L_ptbM,flag);
-                    L_jac(:,i) = (res_ptbP - res_ptbM)/(2*eps2(i));
+%                     res_ptbM = obj.AMres(initParams,kappa,L_ptbM,flag);
+%                     L_jac(:,i) = (res_ptbP - res_ptbM)/(2*eps2(i));
+                    L_jac(:,i) = (res_ptbP - anchored_res)/eps2(i);
                 end
                 L_jac = InvMahalanobis(L_jac,cov);
 
@@ -459,6 +473,8 @@ classdef ArcFit < handle
             
             % Perform data association
             obj.associate(); 
+
+            % Pre Compute Jacobians (Chain Rule)
         end
 
         %% Check Optimization Validity -- Delete After reference
@@ -553,6 +569,57 @@ classdef ArcFit < handle
 %                     obj.params.L = [front_L, 1/2 * curr_L, 1/2 * curr_L, back_L];
                 end
             end            
+        end
+        
+        %% Precompute Jacobian for Chain Rule
+        function obj = precomputeJac(obj)
+            n = length(obj.params.kappa);
+            obj.precomp_jac = struct();            
+            obj.precomp_jac.Xc = zeros(n,2*n+3);
+            obj.precomp_jac.Yc = zeros(n,2*n+3);
+            
+            kappa = obj.params.kappa;
+            L = obj.params.L;
+            heading = obj.params.tau0;            
+
+            for i=1:n
+                if i == 1
+                    obj.precomp_jac.Xc(1,1) = 1;
+                    obj.precomp_jac.Xc(1,3) = -1/kappa(1) * cos(heading);
+                    obj.precomp_jac.Xc(1,4) = 1/kappa(1)^2 * sin(heading);
+
+                    obj.precomp_jac.Yc(1,2) = 1;
+                    obj.precomp_jac.Yc(1,3) = -1/kappa(1) * sin(heading);
+                    obj.precomp_jac.Yc(1,4) = -1/kappa(1)^2 * cos(heading);
+                else
+                    obj.precomp_jac.Xc(i,1) = obj.precomp_jac.Xc(i-1,1);
+                    obj.precomp_jac.Xc(i,3) = obj.precomp_jac.Xc(i-1,3) + (1/kappa(i-1) - 1/kappa(i)) * cos(heading);
+
+                    obj.precomp_jac.Yc(i,2) = obj.precomp_jac.Yc(i-1,2);
+                    obj.precomp_jac.Yc(i,3) = obj.precomp_jac.Yc(i-1,3) + (1/kappa(i-1) - 1/kappa(i)) * sin(heading);
+
+                    for j=1:i
+                        % Kappa
+                        if j == i-1
+                            obj.precomp_jac.Xc(i,3+j) = obj.precomp_jac.Xc(i-1,3+j) + 1/kappa(j)^2 * (kappa(j) * L(j) * cos(heading) - sin(heading)) - L(j)/kappa(j+1) * cos(heading);
+                            obj.precomp_jac.Yc(i,3+j) = obj.precomp_jac.Yc(i-1,3+j) + 1/kappa(j)^2 * (kappa(j) * L(j) * sin(heading) + cos(heading)) - L(j)/kappa(j+1) * sin(heading);
+                        elseif j == i
+                            obj.precomp_jac.Xc(i,3+j) = 1/kappa(i)^2 * sin(heading);
+                            obj.precomp_jac.Yc(i,3+j) = -1/kappa(i)^2 * cos(heading);
+                        else
+                            obj.precomp_jac.Xc(i,3+j) = obj.precomp_jac.Xc(i-1,3+j) + (1/kappa(i-1) - 1/kappa(i)) * L(j) * cos(heading);
+                            obj.precomp_jac.Yc(i,3+j) = obj.precomp_jac.Yc(i-1,3+j) + (1/kappa(i-1) - 1/kappa(i)) * L(j) * sin(heading);
+                        end
+                        % L
+                        if j ~= i
+                            obj.precomp_jac.Xc(i,3+n+j) = obj.precomp_jac.Xc(i-1,3+n+j) + (1/kappa(i-1) - 1/kappa(i)) * kappa(j) * cos(heading);
+                            obj.precomp_jac.Yc(i,3+n+j) = obj.precomp_jac.Yc(i-1,3+n+j) + (1/kappa(i-1) - 1/kappa(i)) * kappa(j) * sin(heading);
+                        end
+                    end                    
+                end
+
+                heading = heading + kappa(i) * L(i);
+            end
         end
 
     end

@@ -42,7 +42,7 @@ covs_.imu.GyroscopeBiasNoise = 5e-10 * eye(3);
 covs_.imu.GyroscopeNoise = 1e-5 * eye(3);
 covs_.imu.AccelerometerBiasNoise = 5e-7* eye(3);
 covs_.imu.AccelerometerNoise = 5/3 * 1e-3 * eye(3);
-covs_.imu.ScaleFactorNoise = 1e-2;
+covs_.imu.ScaleFactorNoise = 1e-4;
 
 % WSS 
 covs_.wss = 1e-6 * eye(3);
@@ -99,7 +99,6 @@ sol.full.optimize();
 % Switch optimization mode to 2-phase and optimize with lane data
 sol.full.opt.options.Algorithm = 'TR';
 
-%%
 sol.full.update('2-phase'); % Update mode to 2-phase
 
 initArcParams = sol.full.map.arc_segments; % save data
@@ -113,7 +112,12 @@ sol.full.optimize();
 
 %%
 % sol.full.map.validate();
+
+% sol.full.map.runAssociation();
+
+
 %%
 sol.full.visualize();
 
-
+%% 
+% sol.full.map.visualize2DMap();

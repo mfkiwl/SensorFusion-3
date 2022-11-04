@@ -197,6 +197,7 @@ classdef optimizer < handle
                     
                     % Step 3: Validate and perform data association 
                     % Create new arc segments if needed 
+%                     error('1')
                     obj.map.validate();
                     
                     % Step 1 is done inside the validation function
@@ -312,7 +313,8 @@ classdef optimizer < handle
             % Test with OSM
             obj.opt.P_lla = P_lla;
             p_est = geoplot(P_lla(:,1),P_lla(:,2),'r.'); grid on; hold on;
-
+            
+%             p_snap = geoplot(dataset.raw_data.snap.lat,dataset.raw_data.snap.lon,'r.');
             p_gnss = geoplot(obj.gnss.pos(:,1),obj.gnss.pos(:,2),'b.');
             
             if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
@@ -347,7 +349,8 @@ classdef optimizer < handle
                     p_lane = geoplot(lla_seg(:,1),lla_seg(:,2),'k-');
                     p_seg = geoplot(lla_node3(1),lla_node3(2),'ms');
                     geoplot(lla_node4(1),lla_node4(2),'ms');
-    
+                    
+                    
                 end
                 geobasemap satellite
 
@@ -356,6 +359,8 @@ classdef optimizer < handle
                        'Optimized Vehicle Trajectory','GNSS Measurements',...
                        'Continuous Piecewise Arc Spline',...
                        'Arc Segment Node','Arc Sub-Segment Node')
+%                 title('Scenario Trajectory')
+%                 legend([p_gnss],'GNSS Measurements')
             else
                 geobasemap satellite
 
@@ -383,7 +388,7 @@ classdef optimizer < handle
             plot(obj.t,whl_spd,'c-');
             xlabel('Time(s)'); ylabel('V(m/s)')
             title('Optimized Velocity (Body Frame)')
-            legend('Vx_{b}','Vy_{b}','Vz_{b}','Wheel Speed')
+            legend('Vx_{b}','Vy_{b}','Vz_{b}','Wheel Speed','Location','NorthWest')
 
             figure(5); hold on; grid on;
 
@@ -630,7 +635,7 @@ classdef optimizer < handle
                 b = -jac' * res;
 
                 x0 = A \ b; 
-                
+                                
                 [res,jac] = obj.cost_func(x0);
 
                 cost = res' * res;
@@ -835,7 +840,10 @@ classdef optimizer < handle
             while true
                 A = jac' * jac; b = -jac' * res; 
                 
+%                 t_start = tic;
                 h_gn = A \ b; % Gauss-Newton Step
+%                 elapsed_t = toc(t_start);
+%                 disp(['A \ b Solver Elapsed Time: ',num2str(elapsed_t),'s'])
 
                 alpha = (b' * b)/(b' * A * b);
                 h_gd = alpha * b; % Gradient Descent Step
@@ -924,6 +932,7 @@ classdef optimizer < handle
                     i = i + 1;
                 else
                     if tr_rad < obj.opt.options.TR.thres
+                        obj.retract(x0,'final');
                         disp(['Current trust region radius ',num2str(tr_rad),' is below threshold: ',num2str(obj.opt.options.TR.thres)])
                         break;
                     end
@@ -939,8 +948,13 @@ classdef optimizer < handle
             [GNSS_res,GNSS_jac] = obj.CreateGNSSBlock();
             [WSS_res,WSS_jac] = obj.CreateWSSBlock();
             
+            % Check Jacobian computation time
+            t_start = tic;
             [AS_res,AS_jac] = obj.CreateASBlock();
+            elapsed_t = toc(t_start);
+            disp(['AS Jacobian Computation Time: ',num2str(elapsed_t),'s'])
             [AS2_res,AS2_jac] = obj.CreateAS2Block();
+%             [AL_res,AL_jac] = obj.CreateALBlock();
             
             res = vertcat(Pr_res,MM_res,GNSS_res,WSS_res,AS_res,AS2_res);
             jac = vertcat(Pr_jac,MM_jac,GNSS_jac,WSS_jac,AS_jac,AS2_jac);   
@@ -1426,6 +1440,43 @@ classdef optimizer < handle
             end
         end
 
+%         %% Arc Length Minimization Module -- Just for test
+%         function [AL_res,AL_jac] = CreateALBlock(obj)
+%             if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
+%                 AL_res = []; AL_jac = [];
+%             else
+%                 cov = 20^2; % Tuning Variable
+%                 n = length(obj.map.arc_segments);
+%                 m = length(obj.states);
+%                 blk_height = n;
+%                 blk_width = length(obj.opt.x0);
+% 
+%                 AL_res = zeros(blk_height,1);
+%                 numSubSeg = 0;
+%                 for i=1:n
+%                     numSubSeg = numSubSeg + length(obj.map.arc_segments{i}.L);
+%                 end
+%                 I = zeros(1,numSubSeg); J = I; V = I;
+%                 
+%                 cnt = 0;
+%                 for i=1:n                   
+%                     L = obj.map.arc_segments{i}.L;
+%                     idxL = 16 * m + obj.opt.seg_tracker(i) + 3 + length(L);
+% 
+%                     val = sum(L);
+%                     AL_res(i) = InvMahalanobis(val,cov);
+%                     jac_val = InvMahalanobis(2 * val,cov);
+%                     I(cnt+1:cnt+length(L)) = ones(1,length(L)) * i;
+%                     J(cnt+1:cnt+length(L)) = idxL+1:idxL+length(L);
+%                     V(cnt+1:cnt+length(L)) = ones(1,length(L)) * jac_val;
+% 
+%                     cnt = cnt + length(L);
+%                 end
+% 
+%                 AL_jac = sparse(I,J,V,blk_height,blk_width);
+%             end
+%         end
+
         %% Retraction
         function obj = retract(obj,delta,mode)
             
@@ -1590,12 +1641,13 @@ classdef optimizer < handle
                 rot_ptb_vec = zeros(3,1);
                 rot_ptb_vec(i) = eps;
                 R_ptbP = R * Exp_map(rot_ptb_vec); 
-                R_ptbM = R * Exp_map(-rot_ptb_vec);
+%                 R_ptbM = R * Exp_map(-rot_ptb_vec);
 
                 res_ptbP = obj.getASRes(R_ptbP,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
-                res_ptbM = obj.getASRes(R_ptbM,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
-
-                r_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
+%                 res_ptbM = obj.getASRes(R_ptbM,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
+% 
+%                 r_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
+                r_jac(i) = (res_ptbP - anchored_res)/eps;
             end
             r_jac = InvMahalanobis(r_jac,cov);
 
@@ -1605,12 +1657,13 @@ classdef optimizer < handle
                 pos_ptb_vec = zeros(3,1);
                 pos_ptb_vec(i) = eps;
                 P_ptbP = P + R * pos_ptb_vec;
-                P_ptbM = P + R * (-pos_ptb_vec);
+%                 P_ptbM = P + R * (-pos_ptb_vec);
 
                 res_ptbP = obj.getASRes(R,P_ptbP,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
-                res_ptbM = obj.getASRes(R,P_ptbM,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
-
-                p_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
+%                 res_ptbM = obj.getASRes(R,P_ptbM,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
+% 
+%                 p_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
+                p_jac(i) = (res_ptbP - anchored_res)/eps;
             end
             p_jac = InvMahalanobis(p_jac,cov);
 
@@ -1619,12 +1672,13 @@ classdef optimizer < handle
                 initParams_ptb_vec = zeros(1,3);
                 initParams_ptb_vec(i) = eps;
                 initParams_ptbP = initParams + initParams_ptb_vec;
-                initParams_ptbM = initParams - initParams_ptb_vec;
+%                 initParams_ptbM = initParams - initParams_ptb_vec;
 
                 res_ptbP = obj.getASRes(R,P,initParams_ptbP,kappa,L,SubSegIdx,lane_idx,k,dir);
-                res_ptbM = obj.getASRes(R,P,initParams_ptbM,kappa,L,SubSegIdx,lane_idx,k,dir);
-
-                param_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
+%                 res_ptbM = obj.getASRes(R,P,initParams_ptbM,kappa,L,SubSegIdx,lane_idx,k,dir);
+% 
+%                 param_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
+                param_jac(i) = (res_ptbP - anchored_res)/eps;
             end
             param_jac = InvMahalanobis(param_jac,cov);
 
@@ -1635,12 +1689,13 @@ classdef optimizer < handle
                 kappa_ptb_vec = zeros(1,length(kappa));
                 kappa_ptb_vec(i) = eps_kappa;
                 kappa_ptbP = kappa + kappa_ptb_vec;
-                kappa_ptbM = kappa - kappa_ptb_vec;
+%                 kappa_ptbM = kappa - kappa_ptb_vec;
 
                 res_ptbP = obj.getASRes(R,P,initParams,kappa_ptbP,L,SubSegIdx,lane_idx,k,dir);
-                res_ptbM = obj.getASRes(R,P,initParams,kappa_ptbM,L,SubSegIdx,lane_idx,k,dir);
-
-                kappa_jac(i) = (res_ptbP - res_ptbM)/(2*eps_kappa);
+%                 res_ptbM = obj.getASRes(R,P,initParams,kappa_ptbM,L,SubSegIdx,lane_idx,k,dir);
+% 
+%                 kappa_jac(i) = (res_ptbP - res_ptbM)/(2*eps_kappa);
+                kappa_jac(i) = (res_ptbP - anchored_res)/eps_kappa;
             end
             kappa_jac = InvMahalanobis(kappa_jac,cov);
 
@@ -1652,12 +1707,13 @@ classdef optimizer < handle
                 % L positive constraint
                 % actual optimization variable is sqrt(L)
                 L_ptbP = ((L - minL).^(1/2) + L_ptb_vec).^2 + minL;
-                L_ptbM = ((L - minL).^(1/2) - L_ptb_vec).^2 + minL;
+%                 L_ptbM = ((L - minL).^(1/2) - L_ptb_vec).^2 + minL;
 
                 res_ptbP = obj.getASRes(R,P,initParams,kappa,L_ptbP,SubSegIdx,lane_idx,k,dir);
-                res_ptbM = obj.getASRes(R,P,initParams,kappa,L_ptbM,SubSegIdx,lane_idx,k,dir);
-
-                L_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
+%                 res_ptbM = obj.getASRes(R,P,initParams,kappa,L_ptbM,SubSegIdx,lane_idx,k,dir);
+% 
+%                 L_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
+                L_jac(i) = (res_ptbP - anchored_res)/eps;
             end
             L_jac = InvMahalanobis(L_jac,cov);
             

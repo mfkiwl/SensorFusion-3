@@ -263,7 +263,11 @@ classdef ArcMap < handle
             disp(['Number of Segments: ',num2str(length(obj.arc_segments)), ...
                   ', Number of Subsegments: ',num2str(numSubSeg)])
         end   
-
+        
+        %% Check if data association has gone wrong
+        function runAssociation(obj)
+            obj.DataAssociation();
+        end
     end
     
     %% Private Methods
@@ -497,6 +501,8 @@ classdef ArcMap < handle
             % Pre-compute arc segment node/center points 
             
             n = length(obj.arc_segments);
+            obj.arc_nodes = {};
+            obj.arc_centers = {};
             for i=1:n                
                 seg = obj.arc_segments{i};
                 initParams = [seg.x0, seg.y0, seg.tau0];
@@ -624,21 +630,33 @@ classdef ArcMap < handle
             % Re-calculate curvature values
             % Update bnds values
             if SubSegIdx == 1
-                seg.L(SubSegIdx) = 1/2 * seg.L(SubSegIdx);
-                seg.L = [L/2 seg.L];
+%                 seg.L(SubSegIdx) = 1/2 * seg.L(SubSegIdx);
+%                 seg.L = [L/2 seg.L];
+                next_L = seg.L(SubSegIdx+1);
+                curr_L = seg.L(SubSegIdx);
+                new_L = 1/2 * (1/2 * curr_L + next_L);
+                rem_L = seg.L(SubSegIdx+2:end);
+                seg.L = [curr_L/2, new_L, new_L, rem_L];
                 
                 rem_kappa = seg.kappa(SubSegIdx+1:end);
-                next_kappa = seg.kappa(SubSegIdx+1);
+%                 next_kappa = seg.kappa(SubSegIdx+1);
 %                 new_kappa = 2/(1/kappa + 1/next_kappa);
 %                 seg.kappa = [kappa, new_kappa, rem_kappa];
 
                 seg.kappa = [kappa, kappa, rem_kappa];
 
             elseif SubSegIdx == length(seg.kappa)                
-                seg.L(SubSegIdx) = 1/2 * seg.L(SubSegIdx);
-                seg.L = [seg.L L/2];
+%                 seg.L(SubSegIdx) = 1/2 * seg.L(SubSegIdx);
+%                 seg.L = [seg.L L/2];
+                
+                prev_L = seg.L(SubSegIdx-1);
+                curr_L = seg.L(SubSegIdx);
+                new_L = 1/2 * (1/2 * curr_L + prev_L);
+                rem_L = seg.L(1:SubSegIdx-2);                
+                seg.L = [rem_L, new_L, new_L, curr_L/2];
+
                 rem_kappa = seg.kappa(1:SubSegIdx-1);
-                prev_kappa = seg.kappa(SubSegIdx-1);                
+%                 prev_kappa = seg.kappa(SubSegIdx-1);                
 %                 new_kappa = 2/(1/kappa + 1/prev_kappa);
 %                 seg.kappa = [rem_kappa, new_kappa, kappa];
 
@@ -647,23 +665,26 @@ classdef ArcMap < handle
             else
                 kappaF = seg.kappa(1:SubSegIdx-1);
                 kappaB = seg.kappa(SubSegIdx+1:end);
-                LF = seg.L(1:SubSegIdx-1);
-                LB = seg.L(SubSegIdx+1:end);                
+%                 LF = seg.L(1:SubSegIdx-1);
+%                 LB = seg.L(SubSegIdx+1:end);
+%                 curr_L = seg.L(SubSegIdx);
+%                 seg.L = [LF, curr_L/2, curr_L/2, LB];
+
+                next_L = seg.L(SubSegIdx+1);
+                curr_L = seg.L(SubSegIdx);
+                prev_L = seg.L(SubSegIdx-1);
+
+                new_LF = 1/2 * (prev_L + 1/2 * curr_L);                
+                new_LB = 1/2 * (next_L + 1/2 * curr_L);
+                seg.L = [LF, new_LF, new_LF, new_LB, new_LB, LB];
+                
+
 %                 kappaF_ = 2/(1/kappaF(end) + 1/kappa);
 %                 kappaB_ = 2/(1/kappa + 1/kappaB(1));
 %                 seg.kappa = [kappaF kappaF_ kappaB_ kappaB];
 
                 seg.kappa = [kappaF, kappa, kappa, kappaB];
-                seg.L = [LF 1/2*L 1/2*L LB];
-
             end
-            % Update stateIdxs for segments
-            [~,c] = find(obj.segment_info == SegIdx);
-%             stateIntvs = obj.lane.FactorValidIntvs(c(1):c(end),1:2);
-%             seg.stateIdxs = zeros(1,size(seg.bnds,1));
-%             for i=1:size(seg.bnds,1)
-%                 seg.stateIdxs(i) = obj.findStateIdx(stateIntvs,seg.bnds(i,2));
-%             end
 
             % Update segment info
             obj.arc_segments{SegIdx} = seg;
