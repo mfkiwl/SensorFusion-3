@@ -21,6 +21,7 @@ classdef ArcFit < handle
         points
         valid = false
         assoc
+        arc_centers
         precomp_jac = struct()
         validity
         options = struct()
@@ -314,8 +315,29 @@ classdef ArcFit < handle
 
             % Algebraic Representation for fast jacobian computation
             xd = Point(1); yd = Point(2);
-                        
+            xc = obj.arc_centers(1,SegIdx); yc = obj.arc_centers(2,SegIdx);
             
+            delX = (xc - xd); delY = (yc - yd);
+            A = 1/sqrt(delX^2 + delY^2);
+            
+            n = length(kappa);
+            init_jac(1) = A * delX;
+            init_jac(2) = A * delY;
+            init_jac(3) = A * (delX * obj.precomp_jac.Xc(SegIdx,3) + delY * obj.precomp_jac.Yc(SegIdx,3));
+            
+            for i=1:SegIdx
+                
+                kappa_jac(i) = A * (delX * obj.precomp_jac.Xc(SegIdx,3+i) + delY * obj.precomp_jac.Yc(SegIdx,3+i));
+                L_jac(i) = A * (delX * obj.precomp_jac.Xc(SegIdx,3+n+i) + delY * obj.precomp_jac.Yc(SegIdx,3+n+i));
+                if i == SegIdx
+                    kappa_jac(i) = kappa_jac(i) + sign(kappa(SegIdx))/kappa(SegIdx)^2;
+                end
+            end
+            
+            init_jac = InvMahalanobis(init_jac,cov);
+            kappa_jac = InvMahalanobis(kappa_jac,cov);
+            L_jac = InvMahalanobis(L_jac,cov);
+
             anchored_res = InvMahalanobis(anchored_res,cov);
         end
         
@@ -450,6 +472,7 @@ classdef ArcFit < handle
             initParams = [obj.params.x0, obj.params.y0, obj.params.tau0];
             kappa = obj.params.kappa; L = obj.params.L;
             nodePoints = obj.propNode(initParams,kappa,L);
+            obj.arc_centers = obj.propCenter(initParams,kappa,L);
             
             % Find Match
             for i=1:length(obj.points)
@@ -475,6 +498,7 @@ classdef ArcFit < handle
             obj.associate(); 
 
             % Pre Compute Jacobians (Chain Rule)
+            obj.precomputeJac();
         end
 
         %% Check Optimization Validity -- Delete After reference

@@ -80,9 +80,9 @@ classdef ArcMap < handle
             % Perform Arc Spline based lane fitting with initial
             % parametrization data
             for i=1:length(obj.arc_segments)
-                initFit = ArcFit(obj.arc_segments{i},obj.segments{i}(1:2,:),i);    
-                initFit.optimize();
-                obj.arc_segments{i} = initFit.getParams();
+                obj.dummy.initFit = ArcFit(obj.arc_segments{i},obj.segments{i}(1:2,:),i);    
+                obj.dummy.initFit.optimize();
+                obj.arc_segments{i} = obj.dummy.initFit.getParams();
             end
             obj.DataAssociation(); 
         end    

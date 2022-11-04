@@ -8,6 +8,7 @@ from scipy import interpolate
 from bisect import bisect_left
 import matplotlib.pyplot as plt
 import scipy.io as sio
+import os
 
 class DataLoader:
     """
@@ -28,9 +29,10 @@ class DataLoader:
                       'gpsLocationExternal.pkl',
                       'liveLocationKalman.pkl',
                       'modelV2.pkl',
-                      'sensorEvents.pkl',
-                      'snapRaw.pkl',
-                      'snapMatched.pkl']
+                      'sensorEvents.pkl']
+
+        # snapRaw.pkl
+        # snapMatched.pkl
 
         self.raw_data = {} # Dictionary to save loaded data files (Raw)
         self.data = {} # Semi-processed Data
@@ -117,6 +119,14 @@ class DataLoader:
             self.data['gnss']['raw_idx'].append(raw_idx[i])
             self.data['gnss']['speed'].append(speed[i])
 
+        
+        lat = [x[0] for x in self.data['gnss']['pos']]
+        lon = [x[1] for x in self.data['gnss']['pos']]
+
+        plt.plot(lon,lat,'r.')
+        plt.show()
+        plt.axis('equal')
+
         # Read and classify IMU data
         DOI = self.raw_data['sensorEvents']['sensorEvents']
         self.data['imu'] = {}
@@ -143,6 +153,7 @@ class DataLoader:
                     self.data['imu']['accel']['meas'].append([meas[0],meas[1],meas[2]])
 
             cnt += 1
+
 
         # ax = []; ay = []; az = []; wx = []; wy = []; wz = []; t = []
         # for acc in self.data['imu']['accel']['meas']:
@@ -294,29 +305,29 @@ class DataLoader:
 
             self.data['lane']['prob'].append([val for val in prob[i]])
 
-        DOI = self.raw_data['snapRaw']
-        t = DOI['timestamp_snap'].to_numpy()
-        lat = DOI['latitude_snap'].to_numpy()
-        lon = DOI['longitude_snap'].to_numpy()
-        dist = DOI['distance_snap'].to_numpy()
+        # DOI = self.raw_data['snapRaw']
+        # t = DOI['timestamp_snap'].to_numpy()
+        # lat = DOI['latitude_snap'].to_numpy()
+        # lon = DOI['longitude_snap'].to_numpy()
+        # dist = DOI['distance_snap'].to_numpy()
 
-        self.data['snap_raw'] = {}
-        self.data['snap_raw']['t'] = t
-        self.data['snap_raw']['lat'] = lat
-        self.data['snap_raw']['lon'] = lon
-        self.data['snap_raw']['dist'] = dist
+        # self.data['snap_raw'] = {}
+        # self.data['snap_raw']['t'] = t
+        # self.data['snap_raw']['lat'] = lat
+        # self.data['snap_raw']['lon'] = lon
+        # self.data['snap_raw']['dist'] = dist
 
-        DOI = self.raw_data['snapMatched']
-        t = DOI['timestamp_snap'].to_numpy()
-        lat = DOI['latitude_snap'].to_numpy()
-        lon = DOI['longitude_snap'].to_numpy()
-        dist = DOI['distance_snap'].to_numpy()
+        # DOI = self.raw_data['snapMatched']
+        # t = DOI['timestamp_snap'].to_numpy()
+        # lat = DOI['latitude_snap'].to_numpy()
+        # lon = DOI['longitude_snap'].to_numpy()
+        # dist = DOI['distance_snap'].to_numpy()
 
-        self.data['snap'] = {}
-        self.data['snap']['t'] = t
-        self.data['snap']['lat'] = lat
-        self.data['snap']['lon'] = lon
-        self.data['snap']['dist'] = dist
+        # self.data['snap'] = {}
+        # self.data['snap']['t'] = t
+        # self.data['snap']['lat'] = lat
+        # self.data['snap']['lon'] = lon
+        # self.data['snap']['dist'] = dist
 
     def save2mat(self):
         """
@@ -324,12 +335,16 @@ class DataLoader:
         
         """
         print("[Saving Files to MATLAB format...]")
+
+        if not os.path.exists(self.save_path):
+            os.makedirs(self.save_path)
+            
         sio.savemat(self.save_path+'gnss.mat',self.data['gnss'])
         sio.savemat(self.save_path+'lane.mat',self.data['lane'])
         sio.savemat(self.save_path+'can.mat',self.data['can'])
         sio.savemat(self.save_path+'imu.mat',self.data['imu'])
-        sio.savemat(self.save_path+'snap_raw.mat',self.data['snap_raw'])
-        sio.savemat(self.save_path+'snap.mat',self.data['snap'])
+        # sio.savemat(self.save_path+'snap_raw.mat',self.data['snap_raw'])
+        # sio.savemat(self.save_path+'snap.mat',self.data['snap'])
         
 def findIntvs(idxs,t):
     n = len(idxs)
