@@ -949,10 +949,10 @@ classdef optimizer < handle
             [WSS_res,WSS_jac] = obj.CreateWSSBlock();
             
             % Check Jacobian computation time
-            t_start = tic;
+%             t_start = tic;
             [AS_res,AS_jac] = obj.CreateASBlock();
-            elapsed_t = toc(t_start);
-            disp(['AS Jacobian Computation Time: ',num2str(elapsed_t),'s'])
+%             elapsed_t = toc(t_start);
+%             disp(['AS Jacobian Computation Time: ',num2str(elapsed_t),'s'])
             [AS2_res,AS2_jac] = obj.CreateAS2Block();
 %             [AL_res,AL_jac] = obj.CreateALBlock();
             
@@ -1440,43 +1440,6 @@ classdef optimizer < handle
             end
         end
 
-%         %% Arc Length Minimization Module -- Just for test
-%         function [AL_res,AL_jac] = CreateALBlock(obj)
-%             if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
-%                 AL_res = []; AL_jac = [];
-%             else
-%                 cov = 20^2; % Tuning Variable
-%                 n = length(obj.map.arc_segments);
-%                 m = length(obj.states);
-%                 blk_height = n;
-%                 blk_width = length(obj.opt.x0);
-% 
-%                 AL_res = zeros(blk_height,1);
-%                 numSubSeg = 0;
-%                 for i=1:n
-%                     numSubSeg = numSubSeg + length(obj.map.arc_segments{i}.L);
-%                 end
-%                 I = zeros(1,numSubSeg); J = I; V = I;
-%                 
-%                 cnt = 0;
-%                 for i=1:n                   
-%                     L = obj.map.arc_segments{i}.L;
-%                     idxL = 16 * m + obj.opt.seg_tracker(i) + 3 + length(L);
-% 
-%                     val = sum(L);
-%                     AL_res(i) = InvMahalanobis(val,cov);
-%                     jac_val = InvMahalanobis(2 * val,cov);
-%                     I(cnt+1:cnt+length(L)) = ones(1,length(L)) * i;
-%                     J(cnt+1:cnt+length(L)) = idxL+1:idxL+length(L);
-%                     V(cnt+1:cnt+length(L)) = ones(1,length(L)) * jac_val;
-% 
-%                     cnt = cnt + length(L);
-%                 end
-% 
-%                 AL_jac = sparse(I,J,V,blk_height,blk_width);
-%             end
-%         end
-
         %% Retraction
         function obj = retract(obj,delta,mode)
             
@@ -1640,14 +1603,9 @@ classdef optimizer < handle
             for i=1:3
                 rot_ptb_vec = zeros(3,1);
                 rot_ptb_vec(i) = eps;
-                R_ptbP = R * Exp_map(rot_ptb_vec); 
-%                 R_ptbM = R * Exp_map(-rot_ptb_vec);
-
-                res_ptbP = obj.getASRes(R_ptbP,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
-%                 res_ptbM = obj.getASRes(R_ptbM,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
-% 
-%                 r_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
-                r_jac(i) = (res_ptbP - anchored_res)/eps;
+                R_ptb = R * Exp_map(rot_ptb_vec); 
+                res_ptb = obj.getASRes(R_ptb,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
+                r_jac(i) = (res_ptb - anchored_res)/eps;
             end
             r_jac = InvMahalanobis(r_jac,cov);
 
@@ -1656,14 +1614,9 @@ classdef optimizer < handle
             for i=1:3
                 pos_ptb_vec = zeros(3,1);
                 pos_ptb_vec(i) = eps;
-                P_ptbP = P + R * pos_ptb_vec;
-%                 P_ptbM = P + R * (-pos_ptb_vec);
-
-                res_ptbP = obj.getASRes(R,P_ptbP,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
-%                 res_ptbM = obj.getASRes(R,P_ptbM,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
-% 
-%                 p_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
-                p_jac(i) = (res_ptbP - anchored_res)/eps;
+                P_ptb = P + R * pos_ptb_vec;
+                res_ptb = obj.getASRes(R,P_ptb,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
+                p_jac(i) = (res_ptb - anchored_res)/eps;
             end
             p_jac = InvMahalanobis(p_jac,cov);
 
@@ -1671,14 +1624,9 @@ classdef optimizer < handle
             for i=1:3
                 initParams_ptb_vec = zeros(1,3);
                 initParams_ptb_vec(i) = eps;
-                initParams_ptbP = initParams + initParams_ptb_vec;
-%                 initParams_ptbM = initParams - initParams_ptb_vec;
-
-                res_ptbP = obj.getASRes(R,P,initParams_ptbP,kappa,L,SubSegIdx,lane_idx,k,dir);
-%                 res_ptbM = obj.getASRes(R,P,initParams_ptbM,kappa,L,SubSegIdx,lane_idx,k,dir);
-% 
-%                 param_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
-                param_jac(i) = (res_ptbP - anchored_res)/eps;
+                initParams_ptb = initParams + initParams_ptb_vec;
+                res_ptb = obj.getASRes(R,P,initParams_ptb,kappa,L,SubSegIdx,lane_idx,k,dir);
+                param_jac(i) = (res_ptb - anchored_res)/eps;
             end
             param_jac = InvMahalanobis(param_jac,cov);
 
@@ -1688,14 +1636,9 @@ classdef optimizer < handle
                 % the target sub-segment index are not used!
                 kappa_ptb_vec = zeros(1,length(kappa));
                 kappa_ptb_vec(i) = eps_kappa;
-                kappa_ptbP = kappa + kappa_ptb_vec;
-%                 kappa_ptbM = kappa - kappa_ptb_vec;
-
-                res_ptbP = obj.getASRes(R,P,initParams,kappa_ptbP,L,SubSegIdx,lane_idx,k,dir);
-%                 res_ptbM = obj.getASRes(R,P,initParams,kappa_ptbM,L,SubSegIdx,lane_idx,k,dir);
-% 
-%                 kappa_jac(i) = (res_ptbP - res_ptbM)/(2*eps_kappa);
-                kappa_jac(i) = (res_ptbP - anchored_res)/eps_kappa;
+                kappa_ptb = kappa + kappa_ptb_vec;
+                res_ptb = obj.getASRes(R,P,initParams,kappa_ptb,L,SubSegIdx,lane_idx,k,dir);
+                kappa_jac(i) = (res_ptb - anchored_res)/eps_kappa;
             end
             kappa_jac = InvMahalanobis(kappa_jac,cov);
 
@@ -1703,17 +1646,11 @@ classdef optimizer < handle
             for i=1:SubSegIdx
                 L_ptb_vec = zeros(1,length(L));
                 L_ptb_vec(i) = eps;
-
                 % L positive constraint
                 % actual optimization variable is sqrt(L)
-                L_ptbP = ((L - minL).^(1/2) + L_ptb_vec).^2 + minL;
-%                 L_ptbM = ((L - minL).^(1/2) - L_ptb_vec).^2 + minL;
-
-                res_ptbP = obj.getASRes(R,P,initParams,kappa,L_ptbP,SubSegIdx,lane_idx,k,dir);
-%                 res_ptbM = obj.getASRes(R,P,initParams,kappa,L_ptbM,SubSegIdx,lane_idx,k,dir);
-% 
-%                 L_jac(i) = (res_ptbP - res_ptbM)/(2*eps);
-                L_jac(i) = (res_ptbP - anchored_res)/eps;
+                L_ptb = ((L - minL).^(1/2) + L_ptb_vec).^2 + minL;
+                res_ptb = obj.getASRes(R,P,initParams,kappa,L_ptb,SubSegIdx,lane_idx,k,dir);
+                L_jac(i) = (res_ptb - anchored_res)/eps;
             end
             L_jac = InvMahalanobis(L_jac,cov);
             
@@ -1731,35 +1668,26 @@ classdef optimizer < handle
                 dij = obj.lane.ry(lane_idx,k);
             end
             % Propgate arc center point until the matched sub-segment 
-            x0 = initParams(1); y0 = initParams(2); heading = initParams(3);
-            for i=1:SubSegIdx
-                if i == 1
-                    Xc = [x0 - 1/kappa(i) * sin(heading);
-                          y0 + 1/kappa(i) * cos(heading)];
-                else
-                    Xc = Xc + (1/kappa(i-1) - 1/kappa(i)) * [sin(heading);
-                                                             -cos(heading)];
-                end
-                heading = heading + kappa(i) * L(i);
-            end
-            Pp = P + R * [10*(k-1);0;0];
-
-            Xc_b = R2d' * (Xc - Pp(1:2)); xc_b = Xc_b(1); yc_b = Xc_b(2);
+            centerPoints = obj.propCenter(initParams,kappa,L);
+            Xc = centerPoints(:,SubSegIdx);
+            Pl = P(1:2) + R2d * [10*(k-1);dij];
+            
             kappa_ = kappa(SubSegIdx);
+            res = sqrt((Xc - Pl)' * (Xc - Pl)) - abs(1/kappa_);            
 
             % WARNING! Need to double check if this logic is appropriate
             % Computing "distance" residual
             % Very unstable, creating complex residual often
-            if kappa_ > 0
-                res = yc_b - sqrt((1/kappa_)^2 - xc_b^2) - dij;
-            else
-                res = yc_b + sqrt((1/kappa_)^2 - xc_b^2) - dij;
-            end
+%             if kappa_ > 0
+%                 res = yc_b - sqrt((1/kappa_)^2 - xc_b^2) - dij;
+%             else
+%                 res = yc_b + sqrt((1/kappa_)^2 - xc_b^2) - dij;
+%             end
         end
 
         %% Arc Spline based Numerical Jacobian Computation 2 Phase 2
         function [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = getAS2Jac(obj,R,P,initParams,kappa,L,lane_idx,dir,SubSegIdx)
-            eps = 1e-6; eps_kappa = 1e-12; minL = obj.lane.minL;
+            eps = 1e-8; eps_kappa = 1e-12; minL = obj.lane.minL;
             anchored_res = obj.getAS2Res(R,P,initParams,kappa,L,lane_idx,dir,SubSegIdx);
             
             r_jac = zeros(2,3); p_jac = zeros(2,3); 
@@ -1780,13 +1708,9 @@ classdef optimizer < handle
             for i=1:3
                 rot_ptb_vec = zeros(3,1);
                 rot_ptb_vec(i) = eps;
-                R_ptbP = R * Exp_map(rot_ptb_vec); 
-                R_ptbM = R * Exp_map(-rot_ptb_vec);
-
-                res_ptbP = obj.getAS2Res(R_ptbP,P,initParams,kappa,L,lane_idx,dir,SubSegIdx);
-                res_ptbM = obj.getAS2Res(R_ptbM,P,initParams,kappa,L,lane_idx,dir,SubSegIdx);
-
-                r_jac(:,i) = (res_ptbP - res_ptbM)/(2*eps);
+                R_ptb = R * Exp_map(rot_ptb_vec);
+                res_ptb = obj.getAS2Res(R_ptb,P,initParams,kappa,L,lane_idx,dir,SubSegIdx);               
+                r_jac(:,i) = (res_ptb - anchored_res)/eps;
             end
             r_jac = InvMahalanobis(r_jac,cov);
 
@@ -1795,13 +1719,9 @@ classdef optimizer < handle
             for i=1:3
                 pos_ptb_vec = zeros(3,1);
                 pos_ptb_vec(i) = eps;
-                P_ptbP = P + R * pos_ptb_vec;
-                P_ptbM = P + R * (-pos_ptb_vec);
-                
-                res_ptbP = obj.getAS2Res(R,P_ptbP,initParams,kappa,L,lane_idx,dir,SubSegIdx);
-                res_ptbM = obj.getAS2Res(R,P_ptbM,initParams,kappa,L,lane_idx,dir,SubSegIdx);
-
-                p_jac(:,i) = (res_ptbP - res_ptbM)/(2*eps);
+                P_ptb = P + R * pos_ptb_vec;                                
+                res_ptb = obj.getAS2Res(R,P_ptb,initParams,kappa,L,lane_idx,dir,SubSegIdx);
+                p_jac(:,i) = (res_ptb - anchored_res)/eps;
             end
             p_jac = InvMahalanobis(p_jac,cov);
 
@@ -1809,13 +1729,9 @@ classdef optimizer < handle
             for i=1:3
                 initParams_ptb_vec = zeros(1,3);
                 initParams_ptb_vec(i) = eps;
-                initParams_ptbP = initParams + initParams_ptb_vec;
-                initParams_ptbM = initParams - initParams_ptb_vec;
-
-                res_ptbP = obj.getAS2Res(R,P,initParams_ptbP,kappa,L,lane_idx,dir,SubSegIdx);
-                res_ptbM = obj.getAS2Res(R,P,initParams_ptbM,kappa,L,lane_idx,dir,SubSegIdx);
-
-                param_jac(:,i) = (res_ptbP - res_ptbM)/(2*eps);
+                initParams_ptb = initParams + initParams_ptb_vec;               
+                res_ptb = obj.getAS2Res(R,P,initParams_ptb,kappa,L,lane_idx,dir,SubSegIdx);                
+                param_jac(:,i) = (res_ptb - anchored_res)/eps;
             end
             param_jac = InvMahalanobis(param_jac,cov);
 
@@ -1823,32 +1739,24 @@ classdef optimizer < handle
             for i=1:length(kappa)
                 kappa_ptb_vec = zeros(1,length(kappa));
                 kappa_ptb_vec(i) = eps_kappa;
-                kappa_ptbP = kappa + kappa_ptb_vec;
-                kappa_ptbM = kappa - kappa_ptb_vec;
-
-                res_ptbP = obj.getAS2Res(R,P,initParams,kappa_ptbP,L,lane_idx,dir,SubSegIdx);
-                res_ptbM = obj.getAS2Res(R,P,initParams,kappa_ptbM,L,lane_idx,dir,SubSegIdx);
-
-                kappa_jac(:,i) = (res_ptbP - res_ptbM)/(2*eps_kappa);
+                kappa_ptb = kappa + kappa_ptb_vec;                
+                res_ptb = obj.getAS2Res(R,P,initParams,kappa_ptb,L,lane_idx,dir,SubSegIdx);                
+                kappa_jac(:,i) = (res_ptb - anchored_res)/eps_kappa;
             end
             kappa_jac = InvMahalanobis(kappa_jac,cov);
             
             % May need to use different epsilon for every subseg to prevent
             % matrix singularity
             % 5: Perturbation to Sub-Segment Params (L)
-            eps_L = 1e-7 * linspace(1,length(L));
+            eps_L = 1e-8 * linspace(1,length(L));
             for i=1:length(L)
                 L_ptb_vec = zeros(1,length(L));
                 L_ptb_vec(i) = eps_L(i);
                 % L positive constraint
                 % actual optimization variable is sqrt(L)
-                L_ptbP = ((L - minL).^(1/2) + L_ptb_vec).^2 + minL;
-                L_ptbM = ((L - minL).^(1/2) - L_ptb_vec).^2 + minL;                
-
-                res_ptbP = obj.getAS2Res(R,P,initParams,kappa,L_ptbP,lane_idx,dir,SubSegIdx);
-                res_ptbM = obj.getAS2Res(R,P,initParams,kappa,L_ptbM,lane_idx,dir,SubSegIdx);
-
-                L_jac(:,i) = (res_ptbP - res_ptbM)/(2*eps_L(i));
+                L_ptb = ((L - minL).^(1/2) + L_ptb_vec).^2 + minL;                      
+                res_ptb = obj.getAS2Res(R,P,initParams,kappa,L_ptb,lane_idx,dir,SubSegIdx);                
+                L_jac(:,i) = (res_ptb - anchored_res)/eps_L(i);
             end
             L_jac = InvMahalanobis(L_jac,cov);
             
@@ -1862,14 +1770,17 @@ classdef optimizer < handle
                    sin(psi) cos(psi)];
 
             % Propgate arc node point until the last sub-segment
-            x = initParams(1); y = initParams(2); heading = initParams(3);   
-            for i=1:SubSegIdx
-                x = x + 1/kappa(i) * (sin(heading + kappa(i) * L(i)) - sin(heading));
-                y = y - 1/kappa(i) * (cos(heading + kappa(i) * L(i)) - cos(heading));
-                heading = heading + kappa(i) * L(i);
-            end
+%             x = initParams(1); y = initParams(2); heading = initParams(3);   
+%             for i=1:SubSegIdx
+%                 x = x + 1/kappa(i) * (sin(heading + kappa(i) * L(i)) - sin(heading));
+%                 y = y - 1/kappa(i) * (cos(heading + kappa(i) * L(i)) - cos(heading));
+%                 heading = heading + kappa(i) * L(i);
+%             end
+            kappa = kappa(1:SubSegIdx);
+            nodePoints = obj.propNode(initParams,kappa,L);
+            X = nodePoints(:,end);
             
-            X = [x;y];
+%             X = [x;y];
             Xb = R2d' * (X - P(1:2)); xb = Xb(1); yb = Xb(2);
 
             if strcmp(dir,'left')
@@ -2072,6 +1983,32 @@ classdef optimizer < handle
             end
         end
         
+        %% Propagate Arc Center Points
+        function centerPoints = propCenter(initParams,kappa,L)
+            x0 = initParams(1); y0 = initParams(2); heading = initParams(3);
+            
+            for i=1:length(kappa)
+                if i == 1
+                    centerPoints = [x0 - 1/kappa(i) * sin(heading); y0 + 1/kappa(i) * cos(heading)];
+                else
+                    centerPoints = [centerPoints centerPoints(:,end) + (1/kappa(i-1) - 1/kappa(i)) * [sin(heading);-cos(heading)]];
+                end
+                heading = heading + kappa(i) * L(i);
+            end
+        end
+        
+        %% Propagate Arc Node Points
+        function nodePoints = propNode(initParams,kappa,L)
+            x0 = initParams(1); y0 = initParams(2); heading = initParams(3);            
+            nodePoints = [x0; y0];
+            
+            for i=1:length(kappa)
+                nodePoints = [nodePoints nodePoints(:,end) + 1/kappa(i) * [sin(heading + kappa(i) * L(i)) - sin(heading);
+                                                                           -cos(heading + kappa(i) * L(i)) + cos(heading)]];
+                heading = heading + kappa(i) * L(i);
+            end
+        end
+
     end
 end
 

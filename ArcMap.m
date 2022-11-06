@@ -82,10 +82,21 @@ classdef ArcMap < handle
             for i=1:length(obj.arc_segments)
                 obj.dummy.initFit = ArcFit(obj.arc_segments{i},obj.segments{i}(1:2,:),i);    
                 obj.dummy.initFit.optimize();
-                obj.arc_segments{i} = obj.dummy.initFit.getParams();
+                obj.arc_segments{i} = obj.dummy.initFit.getParams();                
             end
             obj.DataAssociation(); 
+            
         end    
+        
+        %% Dummy
+        function obj = dummyF(obj)
+            for i=1:length(obj.arc_segments)
+                obj.dummy.initFit = ArcFit(obj.arc_segments{i},obj.segments{i}(1:2,:),i);    
+                obj.dummy.initFit.optimize();
+                obj.arc_segments{i} = obj.dummy.initFit.getParams();
+            end
+        end
+
 
         %% Map Update for 
         function obj = update(obj,states,arc_delta_params)

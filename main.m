@@ -98,8 +98,10 @@ sol.full = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options
 sol.full.optimize();
 % Switch optimization mode to 2-phase and optimize with lane data
 sol.full.opt.options.Algorithm = 'TR';
-
+%%
 sol.full.update('2-phase'); % Update mode to 2-phase
+
+sol.full.map.dummyF();
 
 initArcParams = sol.full.map.arc_segments; % save data
 
@@ -120,4 +122,4 @@ sol.full.optimize();
 sol.full.visualize();
 
 %% 
-% sol.full.map.visualize2DMap();
+sol.full.map.visualize2DMap();
