@@ -17,13 +17,15 @@ classdef dataprocessor < handle
             gnss.raw_idx = gnss.raw_idx + 1;
             can = varargin{3};
             lane = varargin{4};
-            snap = varargin{5};
+            if length(varargin) == 5
+                snap = varargin{5};
+                obj.raw_data.snap = snap;
+            end
 
             obj.raw_data.imu = imu;
             obj.raw_data.gnss = gnss;
             obj.raw_data.can = can;
-            obj.raw_data.lane = lane;
-            obj.raw_data.snap = snap;
+            obj.raw_data.lane = lane;            
         end
 
         %% Process data
@@ -40,7 +42,7 @@ classdef dataprocessor < handle
             for i=1:length(obj.raw_data.can.valid_idxs)-1
                 if obj.raw_data.can.valid_idxs(i+1) - obj.raw_data.can.valid_idxs(i) > 1                    
                     ub = obj.raw_data.can.valid_idxs(i);
-                    obj.raw_data.can.t_intv = [obj.raw_data.can.t_intv; obj.raw_data.can.t(lb-1) obj.raw_data.can.t(ub+1)];
+                    obj.raw_data.t_intv = [obj.raw_data.t_intv; obj.raw_data.can.t(lb-1) obj.raw_data.can.t(ub+1)];
                     lb = obj.raw_data.can.valid_idxs(i+1);
                 end
             end
@@ -152,7 +154,8 @@ classdef dataprocessor < handle
             obj.proc_data.full_t = [];
             obj.proc_data.t = [];
             obj.proc_data.gnss = struct();
-            obj.proc_data.gnss.t = obj.data.gnss{1}.t; % Change in the future for multi-static dataset
+%             obj.proc_data.gnss.t = obj.data.gnss{1}.t; % Change in the future for multi-static dataset
+            obj.proc_data.gnss.t = [];
             obj.proc_data.gnss.state_idxs = [];
             obj.proc_data.gnss.pos = [];
             obj.proc_data.gnss.hAcc = [];
@@ -164,6 +167,7 @@ classdef dataprocessor < handle
             cnt = 0;
 
             for i=1:m
+                obj.proc_data.gnss.t = [obj.proc_data.gnss.t obj.data.gnss{i}.t - base_t - obj.data.gnss{i}.t_bias];
                 obj.data.gnss{i}.full_t = [];
                 n = length(obj.data.gnss{i}.raw_idx);
                 t_bias = obj.data.gnss{i}.t_bias;
@@ -179,7 +183,7 @@ classdef dataprocessor < handle
                     % Add gnss idxs(state_relative)
                     obj.proc_data.gnss.state_idxs = [obj.proc_data.gnss.state_idxs cnt + length(obj.data.gnss{i}.full_t) + 1];
 
-                    if obj.data.gnss{i}.raw_idx(j+1) - obj.data.gnss{i}.raw_idx(j) > 1
+                    if obj.data.gnss{i}.raw_idx(j+1) - obj.data.gnss{i}.raw_idx(j) > 1 % If GNSS Outage is Detected
                         
                         % Error may occur if gnss timestamp spacing is
                         % exact, which is actually very unlikely.
@@ -211,6 +215,43 @@ classdef dataprocessor < handle
                 
                 accel_n = obj.data.imu{i}.accel;
                 gyro_n = obj.data.imu{i}.gyro;
+                
+                if i ~= 1 % Continue adding from previous data fragment
+                    t_lb_ = full_t(1);
+                    [~,idx_lb] = min(abs(imu_t - t_lb_));
+                    t_ub = imu_t(idx_lb) - base_t - t_bias;
+                    
+                    imu_.t = t_lb:0.01:t_ub;
+                    if t_ub - imu_.t(end) > 1e-6
+                        imu_.t = [imu_.t t_ub];
+                    end
+                    
+                    sampleT = [sampleT, t_ub];
+                    sampleAccel = [sampleAccel; accel_n(idx_lb,:)];
+                    sampleAccelX = sampleAccel(:,1);
+                    sampleAccelY = sampleAccel(:,2);
+                    sampleAccelZ = sampleAccel(:,3);
+                    sampleGyro = [sampleGyro; gyro_n(idx_lb,:)];
+                    sampleGyroX = sampleGyro(:,1);
+                    sampleGyroY = sampleGyro(:,2);
+                    sampleGyroZ = sampleGyro(:,3);
+                    
+                    interpedAccelX = interp1(sampleT,sampleAccelX,imu_.t);
+                    interpedAccelY = interp1(sampleT,sampleAccelY,imu_.t);
+                    interpedAccelZ = interp1(sampleT,sampleAccelZ,imu_.t);
+                    interpedGyroX = interp1(sampleT,sampleGyroX,imu_.t);
+                    interpedGyroY = interp1(sampleT,sampleGyroY,imu_.t);
+                    interpedGyroZ = interp1(sampleT,sampleGyroZ,imu_.t);
+                    
+                    accel_N = [interpedAccelX(1:end-1)' interpedAccelY(1:end-1)' interpedAccelZ(1:end-1)'];
+                    gyro_N = [interpedGyroX(1:end-1)' interpedGyroY(1:end-1)' interpedGyroZ(1:end-1)'];
+                    
+                    imu_.accel = accel_N;
+                    imu_.gyro = gyro_N;
+
+                    obj.proc_data.imu = [obj.proc_data.imu {imu_}];
+%                     disp(length(obj.proc_data.imu)) % Check if dt is well defined
+                end
 
                 for j=1:length(full_t)-1
                     t_lb = full_t(j); t_ub = full_t(j+1);
@@ -230,6 +271,25 @@ classdef dataprocessor < handle
                     imu_.t = [imu_.t imu_t(idx_ub) - base_t - t_bias];
                     
                     obj.proc_data.imu = [obj.proc_data.imu {imu_}];
+                end
+                % Between static time intervals
+                if i ~= length(obj.data.gnss)
+                    
+                    imu_ = struct();
+                    imu_.t = [];
+                    imu_.accel = [];
+                    imu_.gyro = [];
+                    
+                    t_lb = imu_t(idx_ub) - base_t - t_bias;
+                    sampleT = t_lb;
+                    sampleAccel = accel_n(idx_ub,:);
+                    sampleGyro = gyro_n(idx_ub,:);
+%                     for k=idx_ub:length(imu_t)
+%                         t_lb = 
+%                         imu_.t = [imu_.t imu_t(k) - base_t - t_bias];
+%                         imu_.accel = [imu_.accel; accel_n(k,:)];
+%                         imu_.gyro = [imu_.gyro; gyro_n(k,:)];
+%                     end
                 end
             end
 
@@ -387,19 +447,11 @@ classdef dataprocessor < handle
                 end
             end
 
-            % Remove last "right turn" as it is not a lane change scenario
-            % This part should be changed for other dataset
-
-            LC_intvs = LC_intvs(1:end-1,:);
-            LC_dirs = LC_dirs(1:end-1);
+           
             obj.proc_data.can.LC_intvs = LC_intvs;
             obj.proc_data.lane.LC_dirs = LC_dirs;
                 
             
-
-
-
-
 %             figure(1);
 %             plot(obj.raw_data.can.t,obj.raw_data.can.leftBlinker,'r-'); hold on; grid on;
 %             plot(obj.raw_data.can.t,obj.raw_data.can.rightBlinker,'b-');
@@ -448,6 +500,22 @@ classdef dataprocessor < handle
             % Augmented Indices
             org = 1:length(laneFactorValidIdxs);
             obj.proc_data.lane.FactorValidIdxs = org(laneFactorValidIdxs);
+
+            %% Remove Pure Left/Right Turns from lane change
+             % Remove last "right turn" as it is not a lane change scenario
+            % This part should be changed for other dataset
+%             LC_intvs(4,:) = [LC_intvs(4,1) LC_intvs(5,2)];
+%             LC_intvs(5,:) = [];
+%             LC_dirs(4) = [];
+%             LC_intvs = LC_intvs(1:end-1,:);
+%             LC_dirs = LC_dirs(1:end-1);
+            laneFactorValidIntvs(4,:) = [laneFactorValidIntvs(4,1), laneFactorValidIntvs(5,2), ...
+                                         laneFactorValidIntvs(5,2) - laneFactorValidIntvs(4,1)+1];
+            laneFactorValidIntvs(5,:) = [];
+            
+            obj.proc_data.lane.FactorValidIntvs = laneFactorValidIntvs;
+            obj.proc_data.lane.LC_dirs(4) = [];
+
         end
         
         %% Visualize Processed data

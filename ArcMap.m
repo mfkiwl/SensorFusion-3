@@ -46,8 +46,14 @@ classdef ArcMap < handle
     properties (Access = public)
         states
         lane
-        segments
+        segments = {}
+        LeftCov
+        RightCov
+        covs = {}
+        ext_segments
+        ext_covs = {}
         arc_segments = {}
+        
         arc_nodes = {}
         arc_centers = {}
         segment_info
@@ -64,39 +70,53 @@ classdef ArcMap < handle
     %% Public Methods
     methods (Access = public)
         %% Constructor
-        function obj = ArcMap(states,lane,lane_prob_thres)
+        function obj = ArcMap(states,lane,lane_prob_thres,LeftCov,RightCov)
             obj.states = states;
             obj.lane = lane;
             obj.lane_prob_thres = lane_prob_thres;
+            obj.LeftCov = LeftCov;
+            obj.RightCov = RightCov;
             obj.assocL = zeros(length(obj.states),obj.lane.prev_num);
             obj.assocR = obj.assocL;
 
             % Initial Segment Classification
             obj.InitSegmentClassification();
             
+%             % Initial Data Points Propagation
+            obj.InitSegmentExtension();
+
             % Initial Segment Parametrization
-            obj.InitSegmentParametrization();
+            obj.InitSegmentParametrization();            
             
+
             % Perform Arc Spline based lane fitting with initial
             % parametrization data
+%             for i=1:length(obj.arc_segments)
+%                 % Fix from here! add covariance
+%                 obj.dummy.initFit = ArcFit(obj.arc_segments{i},obj.segments{i},obj.arc_covs{i},obj.marker{i},i);    
+%                 obj.dummy.initFit.optimize();
+%                 
+%                 obj.arc_segments{i} = obj.dummy.initFit.getParams();                
+%             end
+%             obj.assocL = zeros(length(obj.states),obj.lane.prev_num);
+%             obj.assocR = obj.assocL;
+%             
+%             obj.DataAssociation0();
+%             obj.DataAssociationRem();             
+        end    
+        
+        %% Running Optimization for each Large Segment
+        function obj = dummyF(obj)
             for i=1:length(obj.arc_segments)
-                obj.dummy.initFit = ArcFit(obj.arc_segments{i},obj.segments{i}(1:2,:),i);    
+                obj.dummy.initFit = ArcFit(obj.arc_segments{i}, ...
+                                           obj.segments{i}, ...
+                                           obj.ext_segments{i}, ...
+                                           obj.covs{i}, ...
+                                           obj.ext_covs{i},i);    
                 obj.dummy.initFit.optimize();
                 obj.arc_segments{i} = obj.dummy.initFit.getParams();                
             end
-            obj.DataAssociation(); 
-            
-        end    
-        
-        %% Dummy
-        function obj = dummyF(obj)
-            for i=1:length(obj.arc_segments)
-                obj.dummy.initFit = ArcFit(obj.arc_segments{i},obj.segments{i}(1:2,:),i);    
-                obj.dummy.initFit.optimize();
-                obj.arc_segments{i} = obj.dummy.initFit.getParams();
-            end
         end
-
 
         %% Map Update for 
         function obj = update(obj,states,arc_delta_params)
@@ -125,7 +145,11 @@ classdef ArcMap < handle
             % Perform data association with updated variables
             % Update data association for remaining preview distance 
             % measurements iteratively
-            obj.DataAssociation();            
+            obj.assocL(:,2:obj.lane.prev_num) = zeros(size(obj.assocL,1),size(obj.assocL,2)-1);
+            obj.assocR(:,2:obj.lane.prev_num) = zeros(size(obj.assocR,1),size(obj.assocR,2)-1);
+            obj.DataAssociationRem();     
+            % 0m previewed points have fixed data association 
+            % changes only after validation(replicated segments)
         end
         
         %% Validate Current Map after convergence
@@ -195,7 +219,11 @@ classdef ArcMap < handle
             disp('=========================================================')
             
             % Perform Data Association for next optimization 
-            obj.DataAssociation();
+            obj.assocL = zeros(length(obj.states),obj.lane.prev_num);
+            obj.assocR = obj.assocL;
+            
+            obj.DataAssociation0();
+            obj.DataAssociationRem();
         end
 
         %% Map Visualization (2D Segmentwise Point Map)
@@ -276,9 +304,10 @@ classdef ArcMap < handle
         end   
         
         %% Check if data association has gone wrong
-        function runAssociation(obj)
-            obj.DataAssociation();
+        function run(obj)
+            obj.InitSegmentExtension();
         end
+
     end
     
     %% Private Methods
@@ -306,37 +335,144 @@ classdef ArcMap < handle
                 obj.segment_info(1,i+1) = LeftSegNum;
                 obj.segment_info(2,i+1) = RightSegNum;            
             end
+        end
+        
+        %% Initial Segment Extension
+        function obj = InitSegmentExtension(obj)
+            % Propagate lane points based on raw lane measurements
+            % segments: 0m previewed lane points
+            % ext_segments: remaining previewed lane points
+            % 
 
-            n = size(obj.lane.FactorValidIntvs,1);
-            
             obj.segments = {};
-
+            obj.covs = {};
+            obj.ext_segments = {}; % initialize segments variable again
+            obj.ext_covs = {};
+            n = size(obj.lane.FactorValidIntvs,1);            
+            
             for i=1:n+1
                 obj.segments = [obj.segments {[]}];
+                obj.covs = [obj.covs {[]}];
+                obj.ext_segments = [obj.ext_segments {[]}];
+                obj.ext_covs = [obj.ext_covs {[]}];                
             end
 
             for i=1:n
                 lb = obj.lane.FactorValidIntvs(i,1);
                 ub = obj.lane.FactorValidIntvs(i,2);
-                Left = zeros(3,ub-lb+1);
-                Right = zeros(3,ub-lb+1);
+                Left0 = []; Right0 = []; LeftCov0 = []; RightCov0 = [];
+                Left = []; Right = []; LeftCovR = []; RightCovR = [];                
+            
                 for j=lb:ub
                     R = obj.states{j}.R;
                     P = obj.states{j}.P;
-                    Left(:,j-lb+1) = P + R * obj.states{j}.left(:,1);
-                    Right(:,j-lb+1) = P + R * obj.states{j}.right(:,1);
-                end
+%                     rpy = dcm2rpy(R); psi = rpy(3);
+%                     R2d = [cos(psi), -sin(psi);
+%                            sin(psi), cos(psi)];
+                    
+                    lane_idx = obj.lane.state_idxs(j);
+                    Lprob = obj.lane.prob(lane_idx,2);
+                    Rprob = obj.lane.prob(lane_idx,3);
+                    
+                    LeftL = P + R * obj.states{j}.left(:,1);
+                    RightL = P + R * obj.states{j}.right(:,1);
+                    Left0 = [Left0, LeftL(1:2)];
+                    Right0 = [Right0, RightL(1:2)];
+                    LeftCov0 = [LeftCov0, obj.LeftCov(4*j-3:4*j,1)];
+                    RightCov0 = [RightCov0, obj.RightCov(4*j-3:4*j,1)];                    
+                    
+                    % Add more lane measurements 
+                    if Lprob > obj.lane_prob_thres && Rprob > obj.lane_prob_thres
+
+                        for k=2:obj.lane.prev_num
+                            Lstd = obj.lane.lystd(lane_idx,k);
+                            Rstd = obj.lane.rystd(lane_idx,k);
+                            
+                            LeftL = P + R * obj.states{j}.left(:,k);
+                            RightL = P + R * obj.states{j}.right(:,k);
+                            if Lstd < 3.4 && Rstd < 3.4
+                                Left = [Left, LeftL(1:2)];
+                                Right = [Right, RightL(1:2)];
+                                LeftCovR = [LeftCovR, obj.LeftCov(4*j-3:4*j,k)];
+                                RightCovR = [RightCovR, obj.RightCov(4*j-3:4*j,k)];
+                            end
+                        end                        
+                    end                    
+                end                
                 
-                obj.segments{obj.segment_info(1,i)} = [obj.segments{obj.segment_info(1,i)} Left];
-                obj.segments{obj.segment_info(2,i)} = [obj.segments{obj.segment_info(2,i)} Right];
+                obj.segments{obj.segment_info(1,i)} = [obj.segments{obj.segment_info(1,i)} Left0];
+                obj.segments{obj.segment_info(2,i)} = [obj.segments{obj.segment_info(2,i)} Right0];
+                obj.covs{obj.segment_info(1,i)} = [obj.covs{obj.segment_info(1,i)} LeftCov0];
+                obj.covs{obj.segment_info(2,i)} = [obj.covs{obj.segment_info(2,i)} RightCov0];
+
+                obj.ext_segments{obj.segment_info(1,i)} = [obj.ext_segments{obj.segment_info(1,i)} Left];
+                obj.ext_segments{obj.segment_info(2,i)} = [obj.ext_segments{obj.segment_info(2,i)} Right];
+                obj.ext_covs{obj.segment_info(1,i)} = [obj.ext_covs{obj.segment_info(1,i)} LeftCovR];
+                obj.ext_covs{obj.segment_info(2,i)} = [obj.ext_covs{obj.segment_info(2,i)} RightCovR];
+            end
+
+            disp('[Eliminating invalid extensions...]')
+            % Eliminate points that are outside of the region of interest
+            for i=1:length(obj.segments) 
+                seg = obj.segments{i};
+                ext_seg = obj.ext_segments{i};
+                org_n = size(ext_seg,2);
+                bools = [];
+                % 
+                valid = false;
+                j = 0;
+%                 if i == 10
+%                     figure(1);hold on; grid on; axis equal;
+%                     plot(seg(1,:),seg(2,:),'r.'); 
+%                     plot(ext_seg(1,:),ext_seg(2,:),'b.');
+%                     disp(length(ext_seg))
+%                 end
+                if org_n > 0
+                    while ~valid
+                        j = j + 1;
+
+                        % May need to change 10 to other larger values for
+                        % more accurate removal
+                        valid = obj.isMatched(seg(:,end-10:end),ext_seg(:,j)); 
+                        if valid
+                            flag = true;
+                            break;
+                        else
+                            bools = [bools true];
+                            
+                            if j == org_n % No Valid Match (Too short segment)
+                                obj.ext_segments{i} = [];
+                                new_n = size(obj.ext_segments{i},2);
+                                disp(['[Segment ',num2str(i),'] : ',num2str(org_n-new_n),' points discarded'])
+                                flag = false;
+                                break;
+                            end
+                        end                    
+                    end                
+                    
+                    if flag
+    %                     disp(num2str(i))
+                        while j <= length(ext_seg)
+                            indc = obj.isMatched(seg,ext_seg(:,j));
+                            bools = [bools indc];    
+                            j = j + 1;
+                        end
+                        
+                        obj.ext_segments{i} = ext_seg(:,bools == 1);
+                        new_n = size(obj.ext_segments{i},2);
+                        disp(['[Segment ',num2str(i),'] : ',num2str(org_n-new_n),' points discarded'])
+                    end
+                else
+                    disp(['[Segment ',num2str(i),'] : Already Empty!'])
+                end
             end
         end
         
         %% Initial Segment Parametrization
-        function obj = InitSegmentParametrization(obj)
+        function obj = InitSegmentParametrization(obj)            
             % For each separate segment, perform parametrization
             n = length(obj.segments);
-            for i=1:n
+            for i=1:n                
                 disp(['[Segment ',num2str(i),']'])
                 initIntv = obj.segmentation(obj.segments{i},[1,length(obj.segments{i})],1);
                 initSegments = obj.mergeSeg(obj.segments{i},initIntv);
@@ -362,11 +498,10 @@ classdef ArcMap < handle
 
                 obj.arc_segments = [obj.arc_segments {initParams}];
                 obj.subseg_cnt = [obj.subseg_cnt length(initParams.kappa)];                
-            end
-            
+            end            
 
         end
-
+        
         %% Initial segmentation
         function intvs = segmentation(obj,LP,intv,depth)
             % (1). Connect first and end intervals with a line
@@ -379,7 +514,7 @@ classdef ArcMap < handle
             % Adjust this value to increase or decrease the number of line
             % interpolation. Typically, values smaller than 0.3m is
             % recommended.
-            line_acc_thres = 0.2;
+            line_acc_thres = 0.1;
 
             %% Create Line and visualize current segmentation state 
             init_point = LP(:,intv(1));
@@ -424,7 +559,7 @@ classdef ArcMap < handle
             % save data. Since covariance or weight data of lane points are
             % not available, use rmse error for determining the 'goodness'
             % of circular fitting.
-            rmse_thres = 0.5;
+            rmse_thres = 0.4;
             lb = 1; n = numel(intvL); cnt = 1;
             
             initSegments = {};
@@ -455,7 +590,7 @@ classdef ArcMap < handle
                 % Current sensor fusion model merge lanes almost perfectly,
                 % so setting err_thres to about 1m will be fine.
                 
-                err_thres = 1.5; 
+                err_thres = 1; 
                 while max_fit_err < err_thres
                     % Upper bound is found randomly between (lb+1,n) so that
                     % maximum circular fitting error is between values 3 and 5
@@ -503,8 +638,41 @@ classdef ArcMap < handle
             end
         end
         
+        %% Data Association for 0m preview
+        function obj = DataAssociation0(obj)
+            n = length(obj.arc_segments);
+
+            for i=1:n
+                seg = obj.arc_segments{i};
+                m = size(seg.bnds,1);
+                [r,c] = find(obj.segment_info == i);
+                stateIntvs = obj.lane.FactorValidIntvs(c(1):c(end),1:2);     
+
+                augIdxs = [];      
+                augDirs = [];
+                for j=1:size(stateIntvs,1)                
+                    augIdxs = [augIdxs stateIntvs(j,1):stateIntvs(j,2)];
+                    augDirs = [augDirs r(j) * ones(1,stateIntvs(j,2)-stateIntvs(j,1)+1)];
+                end
+
+                for j=1:m
+                    stateIdxs = augIdxs(seg.bnds(j,1):seg.bnds(j,2));
+                    dirs = augDirs(seg.bnds(j,1):seg.bnds(j,2));                    
+                    
+                    l = length(stateIdxs);
+                    for k=1:l
+                        if dirs(k) == 1
+                            obj.assocL(stateIdxs(k),1) = j;
+                        elseif dirs(k) == 2
+                            obj.assocR(stateIdxs(k),1) = j;
+                        end
+                    end
+                end
+            end
+        end
+
         %% Data Association for remaining preview
-        function obj = DataAssociation(obj)
+        function obj = DataAssociationRem(obj)
             % Data Association with current vehicle state and arc-spline
             % parameters. After each step in optimization, vehicle states
             % and arc parameters should be updated before re-association
@@ -523,10 +691,7 @@ classdef ArcMap < handle
             end
 
             % Data Association
-            n = size(obj.lane.FactorValidIntvs,1);
-            
-            obj.assocL = zeros(length(obj.states),obj.lane.prev_num);
-            obj.assocR = obj.assocL;
+            n = size(obj.lane.FactorValidIntvs,1);                        
 
             for i=1:n
                 % State lb and ub for each large segment
@@ -541,22 +706,27 @@ classdef ArcMap < handle
                     lane_idx = obj.lane.state_idxs(j);                    
                     R = obj.states{j}.R;
                     P = obj.states{j}.P;
+                    
+                    rpy = dcm2rpy(R); psi = rpy(3);
+                    R2d = [cos(psi), -sin(psi);sin(psi), cos(psi)];
 
                     % Filter Valid state idx
                     if obj.lane.prob(lane_idx,2) > obj.lane_prob_thres && obj.lane.prob(lane_idx,3) > obj.lane_prob_thres
                         % Use preview distance measurement only for
                         % reliable measurements
-                        for k=1:obj.lane.prev_num    
+                        
+                        for k=2:obj.lane.prev_num    
                             % If std value of previewed measurement is too
                             % large(abnormal values), reject measurement
                             % even if the lane probability is measured to
                             % be valid. 
                             % 
                             % This is to prevent impossible lane
-                            % measurements from 
-                            if obj.lane.lystd(lane_idx,k) < 3.4 || obj.lane.rystd(lane_idx,k) < 3.4
-                                rel_pos = [10*(k-1);0;0];
-                                pos = P + R * rel_pos;                                
+                            % measurements from corrupting optimization
+                            if obj.lane.lystd(lane_idx,k) < 3.4 || obj.lane.rystd(lane_idx,k) < 3.4                                
+
+                                rel_pos = [10*(k-1);0];
+                                pos = P(1:2) + R2d * rel_pos;  
                                 
                                 segIdxL = obj.match(pos,R,leftSegIdx);
                                 segIdxR = obj.match(pos,R,rightSegIdx);
@@ -565,13 +735,13 @@ classdef ArcMap < handle
                                 obj.assocR(j,k) = segIdxR;                                
                             end                            
                         end
-                    else
-                        % Perform data association only for 0m preview
-                        % measurement
-                        segIdxL = obj.match(P,R,leftSegIdx);
-                        segIdxR = obj.match(P,R,rightSegIdx);
-                        obj.assocL(j,1) = segIdxL;
-                        obj.assocR(j,1) = segIdxR;
+%                     else
+%                         % Perform data association only for 0m preview
+%                         % measurement                        
+%                         segIdxL = obj.match(P,R,leftSegIdx);
+%                         segIdxR = obj.match(P,R,rightSegIdx);
+%                         obj.assocL(j,1) = segIdxL;
+%                         obj.assocR(j,1) = segIdxR;
                     end
 
                     % Check for any abnormal zeros                    
@@ -639,15 +809,15 @@ classdef ArcMap < handle
 
             % Create replica by halving the original arc length
             % Re-calculate curvature values
-            % Update bnds values
+            % * Update bnds values *
             if SubSegIdx == 1
-%                 seg.L(SubSegIdx) = 1/2 * seg.L(SubSegIdx);
-%                 seg.L = [L/2 seg.L];
-                next_L = seg.L(SubSegIdx+1);
-                curr_L = seg.L(SubSegIdx);
-                new_L = 1/2 * (1/2 * curr_L + next_L);
-                rem_L = seg.L(SubSegIdx+2:end);
-                seg.L = [curr_L/2, new_L, new_L, rem_L];
+                seg.L(SubSegIdx) = 1/2 * seg.L(SubSegIdx);
+                seg.L = [L/2 seg.L];
+%                 next_L = seg.L(SubSegIdx+1);
+%                 curr_L = seg.L(SubSegIdx);
+%                 new_L = 1/2 * (1/2 * curr_L + next_L);
+%                 rem_L = seg.L(SubSegIdx+2:end);
+%                 seg.L = [curr_L/2, new_L, new_L, rem_L];
                 
                 rem_kappa = seg.kappa(SubSegIdx+1:end);
 %                 next_kappa = seg.kappa(SubSegIdx+1);
@@ -655,16 +825,29 @@ classdef ArcMap < handle
 %                 seg.kappa = [kappa, new_kappa, rem_kappa];
 
                 seg.kappa = [kappa, kappa, rem_kappa];
+                
+                curr_bnd = seg.bnds(SegIdx,:);
+                next_bnd = seg.bnds(SegIdx+1,:);
+                
+                div1 = floor((curr_bnd(1)+curr_bnd(2))/2);
+                div2 = floor((div1 + next_bnd(2))/2);
+
+                rem_bnds = seg.bnds(SegIdx+2:end,:);
+
+                seg.bnds = [curr_bnd(1), div1;
+                            div1, div2;
+                            div2, next_bnd(2);
+                            rem_bnds];
 
             elseif SubSegIdx == length(seg.kappa)                
-%                 seg.L(SubSegIdx) = 1/2 * seg.L(SubSegIdx);
-%                 seg.L = [seg.L L/2];
+                seg.L(SubSegIdx) = 1/2 * seg.L(SubSegIdx);
+                seg.L = [seg.L L/2];
                 
-                prev_L = seg.L(SubSegIdx-1);
-                curr_L = seg.L(SubSegIdx);
-                new_L = 1/2 * (1/2 * curr_L + prev_L);
-                rem_L = seg.L(1:SubSegIdx-2);                
-                seg.L = [rem_L, new_L, new_L, curr_L/2];
+%                 prev_L = seg.L(SubSegIdx-1);
+%                 curr_L = seg.L(SubSegIdx);
+%                 new_L = 1/2 * (1/2 * curr_L + prev_L);
+%                 rem_L = seg.L(1:SubSegIdx-2);                
+%                 seg.L = [rem_L, new_L, new_L, curr_L/2];
 
                 rem_kappa = seg.kappa(1:SubSegIdx-1);
 %                 prev_kappa = seg.kappa(SubSegIdx-1);                
@@ -673,21 +856,33 @@ classdef ArcMap < handle
 
                 seg.kappa = [rem_kappa, kappa, kappa];
 
+                curr_bnd = seg.bnds(SubSegIdx,:);
+                prev_bnd = seg.bnds(SubSegIdx-1,:);
+
+                div1 = floor((curr_bnd(1) + curr_bnd(2))/2);
+                div2 = floor((prev_bnd(1) + div1)/2);
+
+                rem_bnds = seg.bnds(1:SubSegIdx-2,:);
+                
+                seg.bnds = [rem_bnds;
+                            prev_bnd(1), div2;
+                            div2, div1;
+                            div1, curr_bnd(2)];
             else
                 kappaF = seg.kappa(1:SubSegIdx-1);
                 kappaB = seg.kappa(SubSegIdx+1:end);
-%                 LF = seg.L(1:SubSegIdx-1);
-%                 LB = seg.L(SubSegIdx+1:end);
-%                 curr_L = seg.L(SubSegIdx);
-%                 seg.L = [LF, curr_L/2, curr_L/2, LB];
-
-                next_L = seg.L(SubSegIdx+1);
+                LF = seg.L(1:SubSegIdx-1);
+                LB = seg.L(SubSegIdx+1:end);
                 curr_L = seg.L(SubSegIdx);
-                prev_L = seg.L(SubSegIdx-1);
+                seg.L = [LF, curr_L/2, curr_L/2, LB];
 
-                new_LF = 1/2 * (prev_L + 1/2 * curr_L);                
-                new_LB = 1/2 * (next_L + 1/2 * curr_L);
-                seg.L = [LF, new_LF, new_LF, new_LB, new_LB, LB];
+%                 next_L = seg.L(SubSegIdx+1);
+%                 curr_L = seg.L(SubSegIdx);
+%                 prev_L = seg.L(SubSegIdx-1);
+% 
+%                 new_LF = 1/2 * (prev_L + 1/2 * curr_L);                
+%                 new_LB = 1/2 * (next_L + 1/2 * curr_L);
+%                 seg.L = [LF, new_LF, new_LF, new_LB, new_LB, LB];
                 
 
 %                 kappaF_ = 2/(1/kappaF(end) + 1/kappa);
@@ -695,6 +890,24 @@ classdef ArcMap < handle
 %                 seg.kappa = [kappaF kappaF_ kappaB_ kappaB];
 
                 seg.kappa = [kappaF, kappa, kappa, kappaB];
+
+                curr_bnd = seg.bnds(SubSegIdx,:);
+                prev_bnd = seg.bnds(SubSegIdx-1,:);
+                next_bnd = seg.bnds(SubSegIdx+1,:);
+
+                divC = floor((curr_bnd(1) + curr_bnd(2))/2);
+                divP = floor((divC + prev_bnd(1))/2);
+                divN = floor((divC + next_bnd(2))/2);
+
+                P_bnds = seg.bnds(1:SubSegIdx-2,:);
+                N_bnds = seg.bnds(SubSegIdx+2:end,:);
+
+                seg.bnds = [P_bnds;
+                            prev_bnd(1), divP;
+                            divP, divC;
+                            divC, divN;
+                            divN, next_bnd(2);
+                            N_bnds];
             end
 
             % Update segment info
@@ -708,13 +921,13 @@ classdef ArcMap < handle
             % May need to fix
             % Matching is performed in 2D manner
             segNodes = obj.arc_nodes{SegIdx};
+            
 %             segCenters = obj.arc_centers{SegIdx};
 %             seg = obj.arc_segments{SegIdx};
 
             n = size(segNodes,2);
-            
             rpy = dcm2rpy(att); psi = rpy(3);
-            xv = pos(1); yv = pos(2);
+            xv = pos(1); yv = pos(2);            
             
             cand = [];
             for i=1:n-1
@@ -724,31 +937,32 @@ classdef ArcMap < handle
                 % If dP is not the largest, intersection point is not
                 % between the 2 node points, meaning that matching is not
                 % appropriate.
-
+                
                 P1 = segNodes(:,i); P2 = segNodes(:,i+1);
                 dP = (P1 - P2)' * (P1 - P2);
                 
                 x1 = P1(1); y1 = P1(2); 
                 x2 = P2(1); y2 = P2(2);
-                
+                slope = (y2 - y1)/(x2 - x1);
+
                 x_intersect = (x1 * (y2 - y1)/(x2 - x1) - y1 + xv * 1/tan(psi) + yv)/((y2 - y1)/(x2 - x1) + 1/tan(psi));
-                y_intersect = (y2 - y1)/(x2 - x1) * (x_intersect - x1) + y1;
-                P_intersect = [x_intersect;y_intersect];
+                y_intersect = slope * (x_intersect - x1) + y1; 
+                P_intersect = [x_intersect; y_intersect];
 
                 d1 = (P1 - P_intersect)' * (P1 - P_intersect);
                 d2 = (P2 - P_intersect)' * (P2 - P_intersect);
                 [~,idx] = max([dP,d1,d2]);
                 if idx == 1
                     % Matching Success
-                    % Compute vehicle to intersection point distance
-                    dist = (xv - x_intersect)^2 + (yv - y_intersect)^2; 
+                    % Compute lane point to intersection point distance
+                    dist = (xv - x_intersect)^2 + (yv - y_intersect)^2;                      
                     cand = [cand [i;dist]];
                 end
             end
 
             if ~isempty(cand)
-                % If match candidate exists, pick the one with smallest
-                % matching error as the correct match
+                % If multiple match candidate exists, pick the one with
+                % smallest matching error as the correct match
                 % Vehicle to intersection point distance is small if they
                 % are correctly matched
                 [~,idx] = min(cand(2,:));
@@ -757,7 +971,7 @@ classdef ArcMap < handle
                 SubSegIdx = 0;
             end
         end
-
+        
     end
 
     %% Static Methods
@@ -783,7 +997,7 @@ classdef ArcMap < handle
                 heading = heading + kappa(j) * L(j);
             end
         end
-        
+                
         %% Find minimum column index for first appearance
         function idx = findColIdx(arr,num)
             % Find the first column in arr where num first appears
@@ -791,13 +1005,46 @@ classdef ArcMap < handle
             idx = min(c);
         end
         
-        %% Find state_idx from segment bnds
-        function state_idx = findStateIdx(Intvs,num)
-            augIdxs = [];            
-            for i=1:size(Intvs,1)
-                augIdxs = [augIdxs Intvs(i,1):Intvs(i,2)];
+        %% Find Maximum column index
+        function [idx, dir] = maxColIdx(arr,num)
+            [r,c] = find(arr==num);
+            if isempty(c)
+                error('No matched number')
+            else
+                [idx,max_idx] = max(c);
+                if r(max_idx) == 1
+                    dir = 'left';
+                elseif r(max_idx) == 2
+                    dir = 'right';
+                end
             end
-            state_idx = augIdxs(num);
+        end
+
+        %% Find Minimum column index
+        function [idx, dir] = minColIdx(arr,num)
+            [r,c] = find(arr==num);
+            if isempty(c)
+                error('No matched number')
+            else
+                [idx,min_idx] = min(c);
+                if r(min_idx) == 1
+                    dir = 'left';
+                elseif r(min_idx) == 2
+                    dir = 'right';
+                end
+            end
+        end
+
+        %% Find state_idx from segment bnds
+        function [state_idxs,dirs] = findStateIdx(Intvs,num,dir_arr)
+            augIdxs = [];      
+            augDirs = [];
+            for i=1:size(Intvs,1)                
+                augIdxs = [augIdxs Intvs(i,1):Intvs(i,2)];
+                augDirs = [augDirs dir_arr(i) * ones(1,Intvs(i,2)-Intvs(i,1)+1)];
+            end
+            state_idxs = augIdxs(num);
+            dirs = augDirs(num);
         end
         
         %% Propagate Arc Center Points
@@ -825,6 +1072,79 @@ classdef ArcMap < handle
                 heading = heading + kappa(i) * L(i);
             end
         end 
+        
+        %% Reorder Lane Point Measurements
+        function [reorderedLP, reorderedCov] = reorder(LP,Cov,endPoint)
+            n = size(LP,2);
+            LP = vertcat(LP,1:n);
+            cpydLP = vertcat(LP(:,2:end),2:1:n); 
+            cpydCov = Cov(:,2:end);
+            
+
+            reorderedLP = LP(1:2,1);
+            reorderedCov = Cov(:,1);
+            
+
+            % Perform Nearest Neighbor Search
+            search_idx = 1;
+            d = sqrt((LP(1:2,search_idx) - endPoint)' * (LP(1:2,search_idx) - endPoint));
+            while d > 0.5
+                px = LP(1,search_idx); py = LP(2,search_idx);
+                D = (cpydLP(1,:) - px).^2 + (cpydLP(2,:) - py).^2;
+
+                [~,idx] = min(D);
+                search_idx = cpydLP(3,idx);
+                cpydLP(:,idx) = []; cpydCov(:,idx) = []; 
+                reorderedLP = [reorderedLP LP(1:2,search_idx)];
+                reorderedCov = [reorderedCov Cov(:,search_idx)];
+                
+
+                d = sqrt((LP(1:2,search_idx) - endPoint)' * (LP(1:2,search_idx) - endPoint));
+            end
+
+            if d > 1e-4
+                reorderedLP = [reorderedLP endPoint];
+                px = LP(1,:); py = LP(2,:);
+                D = sqrt((px - endPoint(1)).^2 + (py - endPoint(2)).^2);
+                [~,idx] = min(D);
+                reorderedCov = [reorderedCov Cov(:,idx)];
+                
+            end
+        end
+        
+        %% Return matching boolean
+        function indc = isMatched(LP,Point)
+            n = size(LP,2);
+            indc = false;
+            for i=1:n-1
+                P1 = LP(:,i); P2 = LP(:,i+1);
+                x1 = P1(1); y1 = P1(2); x2 = P2(1); y2 = P2(2);
+                xp = Point(1); yp = Point(2);
+                slope = (y2-y1)/(x2-x1);
+
+                x_vert = (xp + x1 * slope^2 + (yp-y1)*slope)/(1 + slope^2);
+                y_vert = slope * (x_vert - x1) + y1;
+                X_vert = [x_vert; y_vert];
+
+                Dp = (P1 - P2)' * (P1 - P2);
+                D1 = (P1 - X_vert)' * (P1 - X_vert);
+                D2 = (P2 - X_vert)' * (P2 - X_vert);
+%                 disp(['Idx ',num2str(i),'~',num2str(i+1)])
+%                 disp([Dp,D1,D2])
+                [~,max_idx] = max([Dp,D1,D2]);  
+                if max_idx == 1
+                    dist = sqrt((xp - x_vert)^2 + (yp - y_vert)^2);
+                    % If matched distance is too large, not a valid match
+                    % This is to consider high-curvature road intervals,
+                    % where multiple matches are possible
+                    if dist < 5
+                        indc = true;
+                        break;
+                    end
+                end
+
+            end
+        end
 
     end
 end

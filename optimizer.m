@@ -119,7 +119,7 @@ classdef optimizer < handle
                 % Initial segmentation and data association is done in this
                 % step automatically
                 % Complete arc fitting is done in this step
-                obj.map = ArcMap(obj.states,obj.lane,obj.lane.prob_thres);
+                obj.map = ArcMap(obj.states,obj.lane,obj.lane.prob_thres,obj.opt.LeftCov,obj.opt.RightCov);
             end           
         end
 
@@ -178,6 +178,7 @@ classdef optimizer < handle
                 obj.phase = 2;
                 obj.opt.options.Algorithm = 'TR';
                 obj.opt.options.IterThres = inf; % Change if needed
+                obj.opt.options.CostThres = 1;
                 valid = false;
 
                 while ~valid
@@ -192,12 +193,11 @@ classdef optimizer < handle
                         obj.LevenbergMarquardt();
                     elseif strcmp(obj.opt.options.Algorithm,'TR')
                         obj.TrustRegion();
-                    end
-                    
+                    end                    
                     
                     % Step 3: Validate and perform data association 
                     % Create new arc segments if needed 
-%                     error('1')
+                    
                     obj.map.validate();
                     
                     % Step 1 is done inside the validation function
@@ -271,29 +271,29 @@ classdef optimizer < handle
             gnss_pos = lla2enu(obj.gnss.pos,obj.gnss.lla0,'ellipsoid');
             
 
-%             figure(1); hold on; grid on; axis equal;
-% %             p_est = plot3(P(1,:),P(2,:),P(3,:),'r.');
-% %             p_gnss = plot3(gnss_pos(:,1),gnss_pos(:,2),gnss_pos(:,3),'b.');
-% %             
-% %             for i=1:n
-% %                 left_ = left{i}; right_ = right{i};
-% %                 plot3(left_(1,:),left_(2,:),left_(3,:));
-% %                 plot3(right_(1,:),right_(2,:),right_(3,:));
-% %             end
-%             p_est = plot(P(1,:),P(2,:),'r.');
-%             p_gnss = plot(gnss_pos(:,1),gnss_pos(:,2),'b.');
+            figure(1); hold on; grid on; axis equal;
+%             p_est = plot3(P(1,:),P(2,:),P(3,:),'r.');
+%             p_gnss = plot3(gnss_pos(:,1),gnss_pos(:,2),gnss_pos(:,3),'b.');
 %             
 %             for i=1:n
 %                 left_ = left{i}; right_ = right{i};
-%                 plot(left_(1,1),left_(2,1),'cx');
-%                 plot(right_(1,1),right_(2,1),'mx');
+%                 plot3(left_(1,:),left_(2,:),left_(3,:));
+%                 plot3(right_(1,:),right_(2,:),right_(3,:));
 %             end
-% 
-%             for i=1:size(obj.lane.FactorValidIntvs,1)-1
-%                 ub = obj.lane.FactorValidIntvs(i,2);
-%                 plot(obj.states{ub}.P(1),obj.states{ub}.P(2),'g+');
-%             end
-% 
+            p_est = plot(P(1,:),P(2,:),'r.');
+            p_gnss = plot(gnss_pos(:,1),gnss_pos(:,2),'b.');
+            
+            for i=1:n
+                left_ = left{i}; right_ = right{i};
+                plot(left_(1,1),left_(2,1),'cx');
+                plot(right_(1,1),right_(2,1),'mx');
+            end
+
+            for i=1:size(obj.lane.FactorValidIntvs,1)-1
+                ub = obj.lane.FactorValidIntvs(i,2);
+                plot(obj.states{ub}.P(1),obj.states{ub}.P(2),'g+');
+            end
+
 %             if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
 %                 for i=1:n
 %                     left_ = left{i}; right_ = right{i};
@@ -301,21 +301,18 @@ classdef optimizer < handle
 %                     plot(right_(1,:),right_(2,:));
 %                 end
 %             end
-% 
-%             xlabel('Global X'); ylabel('Global Y');
-%             title('Optimized Trajectory 3D Comparison')
-%             legend([p_est,p_gnss],'Estimated Trajectory','GNSS Measurements')
+
+            xlabel('Global X'); ylabel('Global Y');
+            title('Optimized Trajectory 3D Comparison')
+            legend([p_est,p_gnss],'Estimated Trajectory','GNSS Measurements')
             
             figure(2); 
-%             snap_lla = [obj.snap.lat, obj.snap.lon, zeros(size(obj.snap.lat,1),1)];
-            P_lla = enu2lla(P',obj.gnss.lla0,'ellipsoid');
-            
-            % Test with OSM
-            obj.opt.P_lla = P_lla;
-            p_est = geoplot(P_lla(:,1),P_lla(:,2),'r.'); grid on; hold on;
-            
+%             snap_lla = [obj.snap.lat, obj.snap.lon, zeros(size(obj.snap.lat,1),1)];                       
 %             p_snap = geoplot(dataset.raw_data.snap.lat,dataset.raw_data.snap.lon,'r.');
-            p_gnss = geoplot(obj.gnss.pos(:,1),obj.gnss.pos(:,2),'b.');
+            p_gnss = geoplot(obj.gnss.pos(:,1),obj.gnss.pos(:,2),'b.'); grid on; hold on;
+            P_lla = enu2lla(P',obj.gnss.lla0,'ellipsoid');                        
+            obj.opt.P_lla = P_lla;
+            p_est = geoplot(P_lla(:,1),P_lla(:,2),'r.'); 
             
             if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
                 n = length(obj.map.arc_segments);
@@ -426,19 +423,76 @@ classdef optimizer < handle
             end
         end
         
+        %% Visualize with HD Map
+        function visualizeHD(obj,Link,Node)
+            figure(20); hold on; grid on; axis equal;
+            p_l = mapshow(Link); 
+            p_n = mapshow(Node);
+
+            % Convert vehicle states to UTM-K coords            
+            
+            ENU = [];
+            for i=1:length(obj.states)
+                ENU = [ENU; obj.states{i}.P'];                
+            end
+            LLA = enu2lla(ENU,obj.gnss.lla0,'ellipsoid');
+            p = projcrs(32652); % Projected Coordinate Reference System
+            [x,y] = projfwd(p,LLA(:,1),LLA(:,2));
+            p_v = plot(x,y,'k.');
+
+            xlabel('UTM-K X (m)');ylabel('UTM-K Y (m)');
+            title('HD Map')
+            legend([p_l, p_n, p_v],'HD Map Link','HD Map Node','Vehicle Trajectory')
+        end        
+        
+        %% Plot lane point std values
+        function plotConfEllipse(obj,p)
+            % Left Lane
+            figure(1); grid on; axis equal; hold on;
+            % i=1:length(obj.states)
+            for i=700:1000
+                R = obj.states{i}.R;
+                P = obj.states{i}.P;
+                Left = obj.states{i}.left;
+                Right = obj.states{i}.right;
+                % 1:obj.lane.prev_num
+                for j=1:3
+                    LeftL = P + R * Left(:,j);
+                    RightL = P + R * Right(:,j);
+
+                    CovL = reshape(obj.opt.LeftCov(4*i-3:4*i,j),2,2);
+                    CovR = reshape(obj.opt.RightCov(4*i-3:4*i,j),2,2);
+
+                    PC_L = obj.ConfidenceEllipse(LeftL(1:2),CovL,p);
+                    PC_R = obj.ConfidenceEllipse(RightL(1:2),CovR,p);
+
+                    p_l = plot(LeftL(1),LeftL(2),'kx');
+                    plot(RightL(1),RightL(2),'kx');
+                    p_cl = plot(PC_L(1,:),PC_L(2,:),'m--');
+                    p_cr = plot(PC_R(1,:),PC_R(2,:),'c--');
+                end
+            end
+            
+            xlabel('Global X'); ylabel('Global Y');
+            title(['Lane Point ',num2str(100 * p,2),'% Confidence Ellipse'])
+            legend([p_l,p_cl,p_cr], ... 
+                   'Lane Points','Left Lane Confidence Ellipse','Right Lane Confidence Ellipse')
+            
+        end
+
     end
     
     %% Private Methods
     methods (Access = private)
         %% Pre-integration using IMU Measurements, given IMU idxs
         function obj = integrate(obj,idxs)
+%             disp(length(idxs))
             m = length(idxs);
             nbg_cov = obj.covs.imu.GyroscopeNoise;
             nba_cov = obj.covs.imu.AccelerometerNoise;
             n_cov = blkdiag(nbg_cov,nba_cov);
 
             for i=1:m
-%                 disp(i)
                 % Integrate for each IMU clusters
                 idx = idxs(i);
                 n = size(obj.imu{idx}.accel,1);
@@ -685,7 +739,13 @@ classdef optimizer < handle
                     prev_cost = cost;
                 end
                 
-            end                        
+            end
+
+            % Sparse Inverse to extract lane covariance
+            obj.opt.info = jac' * jac;
+            disp('[Computing Sparse Inverse of Information Matrix...]')
+            obj.opt.cov = sparseinv(obj.opt.info);
+            obj.extractLaneCov();
         end
 
         %% Levenberg-Marquardt Method
@@ -938,6 +998,13 @@ classdef optimizer < handle
                     end
                 end
             end
+
+
+            % Sparse Inverse to extract lane covariance
+            obj.opt.info = jac' * jac;
+            disp('[Computing Sparse Inverse of Information Matrix...]')
+            obj.opt.cov = sparseinv(obj.opt.info);
+            obj.extractLaneCov();
         end
 
         %% Optimization Cost Function
@@ -1366,78 +1433,156 @@ classdef optimizer < handle
             else
                 n = length(obj.map.arc_segments);
                 m = length(obj.states);
-                blk_height = 2*n;
+%                 blk_height = 2*n;
+%                 blk_width = length(obj.opt.x0);
+%                 AS2_resF = zeros(blk_height,1);
+%                 AS2_resB = zeros(blk_height,1);
+%                 
+%                 I_F = []; J_F = []; V_F = [];
+%                 I_B = []; J_B = []; V_B = [];
+% 
+%                 % First point anchoring equation
+%                 for i=1:n
+%                     [intvIdx,dir] = obj.minColIdx(obj.map.segment_info,i);
+%                     state_idx = obj.lane.FactorValidIntvs(intvIdx,1);
+%                     R = obj.states{state_idx}.R; P = obj.states{state_idx}.P;
+%                     lane_idx = obj.lane.state_idxs(state_idx);
+%                     seg = obj.map.arc_segments{i};
+%                     initParams = [seg.x0, seg.y0, seg.tau0];
+%                     kappa = seg.kappa; L = seg.L;
+%                     [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = ...
+%                     obj.getAS2Jac(R,P,initParams,kappa,L,lane_idx,dir,'init');
+% 
+%                     AS2_resF(2*i-1:2*i) = anchored_res;
+% 
+%                     idxF = 16 * m + obj.opt.seg_tracker(i);
+%                     idxkF = idxF + 3;
+%                     idxlF = idxF + 3 + length(seg.kappa);
+%                     [I_rF,J_rF,V_rF] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+1:9*(state_idx-1)+3,r_jac);
+%                     [I_pF,J_pF,V_pF] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+7:9*(state_idx-1)+9,p_jac);
+%                     [I_PF,J_PF,V_PF] = sparseFormat(2*i-1:2*i,idxF+1:idxF+3,param_jac);
+%                     % Jacobian for subsegment parameters should
+%                     % be 0 algebraically
+%                     [I_kF,J_kF,V_kF] = sparseFormat(2*i-1:2*i,idxkF+1:idxkF+length(seg.kappa),kappa_jac);
+%                     [I_lF,J_lF,V_lF] = sparseFormat(2*i-1:2*i,idxlF+1:idxlF+length(seg.L),L_jac);
+%                     I_F = [I_F I_rF I_pF I_PF I_kF I_lF];
+%                     J_F = [J_F J_rF J_pF J_PF J_kF J_lF];
+%                     V_F = [V_F V_rF V_pF V_PF V_kF V_lF];
+%                 end
+% 
+%                 % Final point anchoring equation
+%                 for i=1:n
+%                     [intvIdx,dir] = obj.maxColIdx(obj.map.segment_info,i);
+%                     state_idx = obj.lane.FactorValidIntvs(intvIdx,2);
+%                     R = obj.states{state_idx}.R; P = obj.states{state_idx}.P;
+%                     lane_idx = obj.lane.state_idxs(state_idx);
+%                     seg = obj.map.arc_segments{i};
+%                     initParams = [seg.x0, seg.y0, seg.tau0];
+%                     kappa = seg.kappa; L = seg.L;
+%                     [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = ...
+%                     obj.getAS2Jac(R,P,initParams,kappa,L,lane_idx,dir,'last');
+% 
+%                     AS2_resB(2*i-1:2*i) = anchored_res;
+%                     
+%                     idxB = 16 * m + obj.opt.seg_tracker(i);
+%                     idxkB = idxB + 3;
+%                     idxlB = idxB + 3 + length(kappa);
+%                     [I_rB,J_rB,V_rB] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+1:9*(state_idx-1)+3,r_jac);
+%                     [I_pB,J_pB,V_pB] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+7:9*(state_idx-1)+9,p_jac);
+%                     [I_PB,J_PB,V_PB] = sparseFormat(2*i-1:2*i,idxB+1:idxB+3,param_jac);
+%                     [I_kB,J_kB,V_kB] = sparseFormat(2*i-1:2*i,idxkB+1:idxkB+length(kappa),kappa_jac);
+%                     [I_lB,J_lB,V_lB] = sparseFormat(2*i-1:2*i,idxlB+1:idxlB+length(L),L_jac);
+%                     I_B = [I_B I_rB I_pB I_PB I_kB I_lB];
+%                     J_B = [J_B J_rB J_pB J_PB J_kB J_lB];
+%                     V_B = [V_B V_rB V_pB V_PB V_kB V_lB];
+%                 end
+% 
+%                 AS2_res = vertcat(AS2_resF,AS2_resB);
+%                 AS2_jacF = sparse(I_F,J_F,V_F,blk_height,blk_width);
+%                 AS2_jacB = sparse(I_B,J_B,V_B,blk_height,blk_width);
+%                 AS2_jac = vertcat(AS2_jacF,AS2_jacB);
+% 
+%                 obj.opt.AS2_jac = AS2_jac;
+%                 obj.opt.AS2_res = AS2_res;
+
+                numSubSeg = 0;
+                I_size = 0;
+                for i=1:n
+                    % # of Node Points = # of Sub-segments + 1
+                    N = length(obj.map.arc_segments{i}.kappa);
+                    numSubSeg = numSubSeg + N + 1;
+                    I_size = I_size + 2*N^2 + 20 * N + 18;
+                end
+                blk_height = 2 * numSubSeg;
                 blk_width = length(obj.opt.x0);
-                AS2_resF = zeros(blk_height,1);
-                AS2_resB = zeros(blk_height,1);
+                AS2_res = zeros(blk_height,1);
+                I = zeros(1,I_size); J = I; V = I;
                 
-                I_F = []; J_F = []; V_F = [];
-                I_B = []; J_B = []; V_B = [];
-
-                % First point anchoring equation
+                cnt = 0;
+                jac_cnt = 0;
                 for i=1:n
-                    [intvIdx,dir] = obj.minColIdx(obj.map.segment_info,i);
-                    state_idx = obj.lane.FactorValidIntvs(intvIdx,1);
-                    R = obj.states{state_idx}.R; P = obj.states{state_idx}.P;
-                    lane_idx = obj.lane.state_idxs(state_idx);
                     seg = obj.map.arc_segments{i};
+                    bnds = seg.bnds;
+                    [r,c] = find(obj.map.segment_info == i);
+                    stateIntvs = obj.lane.FactorValidIntvs(c(1):c(end),1:2);
+
+                    % Init Node Point
+                    [stateIdx, dir] = obj.map.findStateIdx(stateIntvs,bnds(1,1),r);
+                    laneIdx = obj.lane.state_idxs(stateIdx);
+                    R = obj.states{stateIdx}.R;
+                    P = obj.states{stateIdx}.P;
                     initParams = [seg.x0, seg.y0, seg.tau0];
                     kappa = seg.kappa; L = seg.L;
-                    [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = ...
-                    obj.getAS2Jac(R,P,initParams,kappa,L,lane_idx,dir,0);
 
-                    AS2_resF(2*i-1:2*i) = anchored_res;
+                    idxInit = 16 * m + obj.opt.seg_tracker(i);
+                    idxKappa = idxInit + 3;
+                    idxL = idxKappa + length(seg.kappa);
 
-                    idxF = 16 * m + obj.opt.seg_tracker(i);
-                    idxkF = idxF + 3;
-                    idxlF = idxF + 3 + length(seg.kappa);
-                    [I_rF,J_rF,V_rF] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+1:9*(state_idx-1)+3,r_jac);
-                    [I_pF,J_pF,V_pF] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+7:9*(state_idx-1)+9,p_jac);
-                    [I_PF,J_PF,V_PF] = sparseFormat(2*i-1:2*i,idxF+1:idxF+3,param_jac);
-                    % Jacobian for subsegment parameters should
-                    % be 0 algebraically
-                    [I_kF,J_kF,V_kF] = sparseFormat(2*i-1:2*i,idxkF+1:idxkF+length(seg.kappa),kappa_jac);
-                    [I_lF,J_lF,V_lF] = sparseFormat(2*i-1:2*i,idxlF+1:idxlF+length(seg.L),L_jac);
-                    I_F = [I_F I_rF I_pF I_PF I_kF I_lF];
-                    J_F = [J_F J_rF J_pF J_PF J_kF J_lF];
-                    V_F = [V_F V_rF V_pF V_PF V_kF V_lF];
-                end
-
-                % Final point anchoring equation
-                for i=1:n
-                    [intvIdx,dir] = obj.maxColIdx(obj.map.segment_info,i);
-                    state_idx = obj.lane.FactorValidIntvs(intvIdx,2);
-                    R = obj.states{state_idx}.R; P = obj.states{state_idx}.P;
-                    lane_idx = obj.lane.state_idxs(state_idx);
-                    seg = obj.map.arc_segments{i};
-                    initParams = [seg.x0, seg.y0, seg.tau0];
-                    kappa = seg.kappa; L = seg.L;
-                    [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = ...
-                    obj.getAS2Jac(R,P,initParams,kappa,L,lane_idx,dir,length(kappa));
-
-                    AS2_resB(2*i-1:2*i) = anchored_res;
+                    [r_jac,p_jac,param_jac,~,~,anchored_res] = obj.getAS2Jac(R,P,initParams,kappa,L,laneIdx,dir,0);
                     
-                    idxB = 16 * m + obj.opt.seg_tracker(i);
-                    idxkB = idxB + 3;
-                    idxlB = idxB + 3 + length(kappa);
-                    [I_rB,J_rB,V_rB] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+1:9*(state_idx-1)+3,r_jac);
-                    [I_pB,J_pB,V_pB] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+7:9*(state_idx-1)+9,p_jac);
-                    [I_PB,J_PB,V_PB] = sparseFormat(2*i-1:2*i,idxB+1:idxB+3,param_jac);
-                    [I_kB,J_kB,V_kB] = sparseFormat(2*i-1:2*i,idxkB+1:idxkB+length(kappa),kappa_jac);
-                    [I_lB,J_lB,V_lB] = sparseFormat(2*i-1:2*i,idxlB+1:idxlB+length(L),L_jac);
-                    I_B = [I_B I_rB I_pB I_PB I_kB I_lB];
-                    J_B = [J_B J_rB J_pB J_PB J_kB J_lB];
-                    V_B = [V_B V_rB V_pB V_PB V_kB V_lB];
+                    AS2_res(2*cnt+1:2*cnt+2) = anchored_res;
+                    
+                    [I_r,J_r,V_r] = sparseFormat(2*cnt+1:2*cnt+2,9*(stateIdx-1)+1:9*(stateIdx-1)+3,r_jac);
+                    [I_p,J_p,V_p] = sparseFormat(2*cnt+1:2*cnt+2,9*(stateIdx-1)+7:9*(stateIdx-1)+9,p_jac);
+                    [I_P,J_P,V_P] = sparseFormat(2*cnt+1:2*cnt+2,idxInit+1:idxInit+3,param_jac);
+                    
+                    I(jac_cnt+1:jac_cnt+9*2) = [I_r,I_p,I_P];
+                    J(jac_cnt+1:jac_cnt+9*2) = [J_r,J_p,J_P];
+                    V(jac_cnt+1:jac_cnt+9*2) = [V_r,V_p,V_P];
+
+                    cnt = cnt + 1;
+                    jac_cnt = jac_cnt + 9*2;
+
+                    % Remaining Node Points
+                    for j=1:size(bnds,1)
+                        [stateIdx, dir] = obj.map.findStateIdx(stateIntvs,bnds(j,2),r);
+                        laneIdx = obj.lane.state_idxs(stateIdx);
+                        R = obj.states{stateIdx}.R;
+                        P = obj.states{stateIdx}.P;
+                        initParams = [seg.x0, seg.y0, seg.tau0];
+                        kappa = seg.kappa; L = seg.L;
+                        [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = obj.getAS2Jac(R,P,initParams,kappa,L,laneIdx,dir,j);
+                        
+                        AS2_res(2*cnt+1:2*cnt+2) = anchored_res;
+                        
+                        [I_r,J_r,V_r] = sparseFormat(2*cnt+1:2*cnt+2,9*(stateIdx-1)+1:9*(stateIdx-1)+3,r_jac);
+                        [I_p,J_p,V_p] = sparseFormat(2*cnt+1:2*cnt+2,9*(stateIdx-1)+7:9*(stateIdx-1)+9,p_jac);
+                        [I_P,J_P,V_P] = sparseFormat(2*cnt+1:2*cnt+2,idxInit+1:idxInit+3,param_jac);
+                        [I_k,J_k,V_k] = sparseFormat(2*cnt+1:2*cnt+2,idxKappa+1:idxKappa+j,kappa_jac);
+                        [I_L,J_L,V_L] = sparseFormat(2*cnt+1:2*cnt+2,idxL+1:idxL+j,L_jac);
+
+                        I(jac_cnt+1:jac_cnt+9*2+2*2*j) = [I_r,I_p,I_P,I_k,I_L];
+                        J(jac_cnt+1:jac_cnt+9*2+2*2*j) = [J_r,J_p,J_P,J_k,J_L];
+                        V(jac_cnt+1:jac_cnt+9*2+2*2*j) = [V_r,V_p,V_P,V_k,V_L];
+
+                        cnt = cnt + 1;
+                        jac_cnt = jac_cnt + 9*2 + 2*2*j;
+                    end
                 end
 
-                AS2_res = vertcat(AS2_resF,AS2_resB);
-                AS2_jacF = sparse(I_F,J_F,V_F,blk_height,blk_width);
-                AS2_jacB = sparse(I_B,J_B,V_B,blk_height,blk_width);
-                AS2_jac = vertcat(AS2_jacF,AS2_jacB);
-
-                obj.opt.AS2_jac = AS2_jac;
-                obj.opt.AS2_res = AS2_res;
+                AS2_jac = sparse(I,J,V,blk_height,blk_width);
             end
+
         end
 
         %% Retraction
@@ -1583,7 +1728,7 @@ classdef optimizer < handle
         
         %% Arc Spline based Numerical Jacobian Computation Phase 2
         function [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = getASJac(obj,R,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir)
-            eps = 1e-8; eps_kappa = 1e-12; minL = obj.lane.minL;
+            eps = 1e-6; eps_kappa = 1e-10; minL = obj.lane.minL;
             anchored_res = obj.getASRes(R,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
             
             r_jac = zeros(1,3); p_jac = zeros(1,3); 
@@ -1664,47 +1809,55 @@ classdef optimizer < handle
                    sin(psi) cos(psi)];
             if strcmp(dir,'left')
                 dij = obj.lane.ly(lane_idx,k);
+%                 zij = obj.lane.lz(lane_idx,k);
             elseif strcmp(dir,'right')
                 dij = obj.lane.ry(lane_idx,k);
+%                 zij = obj.lane.rz(lane_idx,k);
             end
             % Propgate arc center point until the matched sub-segment 
             centerPoints = obj.propCenter(initParams,kappa,L);
             Xc = centerPoints(:,SubSegIdx);
-            Pl = P(1:2) + R2d * [10*(k-1);dij];
-            
-            kappa_ = kappa(SubSegIdx);
-            res = sqrt((Xc - Pl)' * (Xc - Pl)) - abs(1/kappa_);            
+%             Pl = P + R * [10*(k-1);dij;zij];
+%             
+%             kappa_ = kappa(SubSegIdx);
+%             res = sqrt((Xc - Pl(1:2))' * (Xc - Pl(1:2))) - abs(1/kappa_);            
 
             % WARNING! Need to double check if this logic is appropriate
             % Computing "distance" residual
             % Very unstable, creating complex residual often
-%             if kappa_ > 0
-%                 res = yc_b - sqrt((1/kappa_)^2 - xc_b^2) - dij;
-%             else
-%                 res = yc_b + sqrt((1/kappa_)^2 - xc_b^2) - dij;
-%             end
+            Pp = P(1:2) + R2d * [10*(k-1);0];
+            Xc_b = R2d' * (Xc - Pp); xc_b = Xc_b(1); yc_b = Xc_b(2);
+            kappa_ = kappa(SubSegIdx);
+            if kappa_ > 0
+                res = yc_b - sqrt((1/kappa_)^2 - xc_b^2) - dij;
+            else
+                res = yc_b + sqrt((1/kappa_)^2 - xc_b^2) - dij;
+            end
         end
 
         %% Arc Spline based Numerical Jacobian Computation 2 Phase 2
         function [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = getAS2Jac(obj,R,P,initParams,kappa,L,lane_idx,dir,SubSegIdx)
-            eps = 1e-8; eps_kappa = 1e-12; minL = obj.lane.minL;
+            eps = 1e-6; eps_kappa = 1e-10; minL = obj.lane.minL;
+%             eps_L = 1e-6 * linspace(1,length(L));
+            eps_L = 5;
             anchored_res = obj.getAS2Res(R,P,initParams,kappa,L,lane_idx,dir,SubSegIdx);
             
             r_jac = zeros(2,3); p_jac = zeros(2,3); 
             param_jac = zeros(2,3);
-            kappa_jac = zeros(2,length(kappa)); L_jac = zeros(2,length(L));
+            kappa_jac = zeros(2,SubSegIdx); L_jac = zeros(2,SubSegIdx);
 
-            if strcmp(dir,'left')
+            if dir == 1
                 cov = diag([0.01^2, obj.lane.lystd(lane_idx,1)^2]);
-            elseif strcmp(dir,'right')
+            elseif dir == 2
                 cov = diag([0.01^2, obj.lane.rystd(lane_idx,1)^2]);
             end
+%             cov = 1e-5 * eye(1);
             
             % Add perturbation to all variables of
             % interest to find jacobian
 
             % 1: Perturbation to Rotational Matrix
-
+            
             for i=1:3
                 rot_ptb_vec = zeros(3,1);
                 rot_ptb_vec(i) = eps;
@@ -1735,29 +1888,25 @@ classdef optimizer < handle
             end
             param_jac = InvMahalanobis(param_jac,cov);
 
-            % 4: Perturbation to Sub-Segment Params (kappa)
-            for i=1:length(kappa)
+            % 4: Perturbation to Sub-Segment Params (kappa, L)
+            for i=1:SubSegIdx
                 kappa_ptb_vec = zeros(1,length(kappa));
                 kappa_ptb_vec(i) = eps_kappa;
-                kappa_ptb = kappa + kappa_ptb_vec;                
-                res_ptb = obj.getAS2Res(R,P,initParams,kappa_ptb,L,lane_idx,dir,SubSegIdx);                
-                kappa_jac(:,i) = (res_ptb - anchored_res)/eps_kappa;
-            end
-            kappa_jac = InvMahalanobis(kappa_jac,cov);
-            
-            % May need to use different epsilon for every subseg to prevent
-            % matrix singularity
-            % 5: Perturbation to Sub-Segment Params (L)
-            eps_L = 1e-8 * linspace(1,length(L));
-            for i=1:length(L)
+                kappa_ptb = kappa + kappa_ptb_vec;     
+                
                 L_ptb_vec = zeros(1,length(L));
-                L_ptb_vec(i) = eps_L(i);
+                L_ptb_vec(i) = eps_L;
                 % L positive constraint
                 % actual optimization variable is sqrt(L)
-                L_ptb = ((L - minL).^(1/2) + L_ptb_vec).^2 + minL;                      
-                res_ptb = obj.getAS2Res(R,P,initParams,kappa,L_ptb,lane_idx,dir,SubSegIdx);                
-                L_jac(:,i) = (res_ptb - anchored_res)/eps_L(i);
+                L_ptb = ((L - minL).^(1/2) + L_ptb_vec).^2 + minL;   
+
+                res_ptbK = obj.getAS2Res(R,P,initParams,kappa_ptb,L,lane_idx,dir,SubSegIdx); 
+                res_ptbL = obj.getAS2Res(R,P,initParams,kappa,L_ptb,lane_idx,dir,SubSegIdx); 
+
+                kappa_jac(:,i) = (res_ptbK - anchored_res)/eps_kappa;
+                L_jac(:,i) = (res_ptbL - anchored_res)/eps_L;
             end
+            kappa_jac = InvMahalanobis(kappa_jac,cov);
             L_jac = InvMahalanobis(L_jac,cov);
             
             anchored_res = InvMahalanobis(anchored_res,cov);
@@ -1776,18 +1925,25 @@ classdef optimizer < handle
 %                 y = y - 1/kappa(i) * (cos(heading + kappa(i) * L(i)) - cos(heading));
 %                 heading = heading + kappa(i) * L(i);
 %             end
-            kappa = kappa(1:SubSegIdx);
-            nodePoints = obj.propNode(initParams,kappa,L);
-            X = nodePoints(:,end);
-            
-%             X = [x;y];
-            Xb = R2d' * (X - P(1:2)); xb = Xb(1); yb = Xb(2);
-
-            if strcmp(dir,'left')
+            if dir == 1
                 dij = obj.lane.ly(lane_idx,1);
-            elseif strcmp(dir,'right')
+%                 zij = obj.lane.lz(lane_idx,1);
+            elseif dir == 2
                 dij = obj.lane.ry(lane_idx,1);
+%                 zij = obj.lane.rz(lane_idx,1);
             end
+            
+            nodePoints = obj.propNode(initParams,kappa,L);
+            X = nodePoints(:,SubSegIdx+1);
+
+%             if strcmp(flag,'init')
+%                 X = [initParams(1);initParams(2)];                
+%             elseif strcmp(flag,'last')
+%                 nodePoints = obj.propNode(initParams,kappa,L);
+%                 X = nodePoints(:,end);
+%             end
+            
+            Xb = R2d' * (X - P(1:2)); xb = Xb(1); yb = Xb(2);            
             % xb should be 0 (ideal)
             res = [xb;yb - dij];      
         end
@@ -1852,7 +2008,43 @@ classdef optimizer < handle
             
             error('Information matrix is singular... stopping optimization')
         end
-           
+        
+        %% Extract Lane Point Covariance Information
+        function obj = extractLaneCov(obj)
+            obj.opt.LeftCov = zeros(4*length(obj.states),obj.lane.prev_num);
+            obj.opt.RightCov = zeros(4*length(obj.states),obj.lane.prev_num);
+            
+            disp(['Extracting 2D Lane Point Covariance via Multivariate-Delta Method'])
+            for i=1:length(obj.states)
+                R_idx = 9*(i-1)+1:9*(i-1)+3;
+                P_idx = 9*(i-1)+7:9*(i-1)+9;
+                state_cov = [obj.opt.cov(R_idx,R_idx), obj.opt.cov(R_idx,P_idx);
+                             obj.opt.cov(P_idx,R_idx), obj.opt.cov(P_idx,P_idx)];
+                lane_idx = obj.lane.state_idxs(i);
+                
+                R = obj.states{i}.R;
+
+                for j=1:obj.lane.prev_num
+                    LeftL_cov = diag([0, obj.lane.lystd(lane_idx,j)^2, obj.lane.lzstd(lane_idx,j)^2]);
+                    RightL_cov = diag([0, obj.lane.lystd(lane_idx,j)^2, obj.lane.lzstd(lane_idx,j)^2]);
+                    LeftL = obj.states{i}.left(:,j);
+                    RightL = obj.states{i}.right(:,j);
+
+                    CovL = blkdiag(state_cov,LeftL_cov);
+                    CovR = blkdiag(state_cov,RightL_cov);
+
+                    jacL = [-R * skew(LeftL);R;R];
+                    jacR = [-R * skew(RightL);R;R];
+
+                    GCovL = jacL' * CovL * jacL;
+                    GCovR = jacR' * CovR * jacR;
+
+                    obj.opt.LeftCov(4*i-3:4*i,j) = reshape(GCovL(1:2,1:2),4,1);
+                    obj.opt.RightCov(4*i-3:4*i,j) = reshape(GCovR(1:2,1:2),4,1);
+                end
+            end            
+        end
+
     end
     
     %% Static Methods
@@ -2007,6 +2199,22 @@ classdef optimizer < handle
                                                                            -cos(heading + kappa(i) * L(i)) + cos(heading)]];
                 heading = heading + kappa(i) * L(i);
             end
+        end
+        
+        %% Compute Confidence Ellipse Point
+        function pc = ConfidenceEllipse(mu, Sigma, p)
+            s = -2 * log(1 - p);
+            
+            pc = zeros(2,100);            
+            
+            sig = reshape(Sigma,2,2);
+            [V, D] = eig(sig * s);
+        
+            t = linspace(0, 2 * pi);
+            a = (V * sqrt(D)) * [cos(t(:))'; sin(t(:))'];
+        
+            pc(1,:) = a(1,:) + mu(1);
+            pc(2,:) = a(2,:) + mu(2);             
         end
 
     end

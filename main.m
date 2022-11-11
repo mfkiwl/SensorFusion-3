@@ -3,14 +3,19 @@
 
 clear; close all; clc;
 %% Load Raw Data (Not 'really' raw, take a look at 'dataloader.py')
-imu = load('imu.mat');
-gnss = load('gnss.mat');
-lane = load('lane.mat');
-can = load('can.mat');
-snap = load('snap_raw.mat');
+imu = load('D:\SJ_Dataset\2022-08-05\2022-08-05--02-41-03\results\imu.mat');
+gnss = load('D:\SJ_Dataset\2022-08-05\2022-08-05--02-41-03\results\gnss.mat');
+lane = load('D:\SJ_Dataset\2022-08-05\2022-08-05--02-41-03\results\lane.mat');
+can = load('D:\SJ_Dataset\2022-08-05\2022-08-05--02-41-03\results\can.mat');
+
+% imu = load('imu.mat');
+% gnss = load('gnss.mat');
+% lane = load('lane.mat');
+% can = load('can.mat');
+% snap = load('snap_raw.mat');
 
 %% Pre Process raw data
-dataset = dataprocessor(imu,gnss,can,lane,snap);
+dataset = dataprocessor(imu,gnss,can,lane);
 dataset.process();
 % dataset.visualize();
 
@@ -22,6 +27,7 @@ lane_ = dataset.proc_data.lane;
 can_ = dataset.proc_data.can;
 bias_ = dataset.proc_data.initBias;
 t_ = dataset.proc_data.t;
+snap = 0;
 
 % Covariance Setttings: Prior, Accel & Gyro Noise, Bias randomwalk 
 covs_ = struct();
@@ -67,7 +73,7 @@ options.LM.Ld = 5; % Lambda Decrease divider
 options.TR = struct();
 options.TR.eta1 = 0.6;
 options.TR.eta2 = 0.9;
-options.TR.gamma1 = 0.1;
+options.TR.gamma1 = 0.1;  
 options.TR.gamma2 = 2;
 options.TR.thres = 1e-6; % Trust Region Radius Threshold
 
@@ -101,6 +107,8 @@ sol.full.opt.options.Algorithm = 'TR';
 %%
 sol.full.update('2-phase'); % Update mode to 2-phase
 
+
+%%
 sol.full.map.dummyF();
 
 initArcParams = sol.full.map.arc_segments; % save data
@@ -115,7 +123,7 @@ sol.full.optimize();
 %%
 % sol.full.map.validate();
 
-% sol.full.map.runAssociation();
+
 
 
 %%
@@ -123,3 +131,15 @@ sol.full.visualize();
 
 %% 
 sol.full.map.visualize2DMap();
+
+%% Compare with HD Map
+% HD Map Data obtained from: http://map.ngii.go.kr/ms/pblictn/preciseRoadMap.do
+%
+% cd D:/SJ_Dataset/HDMap/Map1/HDMap_UTMK_타원체고/
+% cd D:/SJ_Dataset/HDMap/Map2/SEC01_BRT_내부간선도로/HDMap_UTMK_타원체고/
+% cd D:/SJ_Dataset/HDMap/Map2/SEC02_세종정부청사_주변/HDMap_UTMK_타원체고/
+
+T1 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A1_NODE.shp");
+T2 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A2_LINK.shp");
+sol.full.visualizeHD(T1,T2);
+

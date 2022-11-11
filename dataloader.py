@@ -54,9 +54,10 @@ class DataLoader:
         
         # Read CAN data
         DOI = self.raw_data['carState']
+        
         left = DOI['leftBlinker'].to_numpy()
         right = DOI['rightBlinker'].to_numpy()
-        whl_spd = DOI['rl'].to_numpy()
+        whl_spd = DOI['wheelSpeeds.rl'].to_numpy()
         
         can_t = DOI.index
 
@@ -128,7 +129,9 @@ class DataLoader:
         plt.axis('equal')
 
         # Read and classify IMU data
-        DOI = self.raw_data['sensorEvents']['sensorEvents']
+        
+        DOI = self.raw_data['sensorEvents']['']
+        print(DOI.keys())
         self.data['imu'] = {}
 
         IMU = {}

@@ -75,7 +75,7 @@ end
 
 figure(2);
 mapshow(T1);
-mapshow(T2);
+mapshow(T2); grid on; axis equal; 
 
 % Conclusion: Converting UTM-K to WGS84 should not be performed.
 % Other than straight lane links, curved lane links cannot be properly
