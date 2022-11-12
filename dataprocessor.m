@@ -51,7 +51,7 @@ classdef dataprocessor < handle
             
             t_intv = obj.raw_data.t_intv;
             % Filter out invalid gnss measurements
-            not_outage_idxs = find(obj.raw_data.gnss.hAcc < 3); % Remove GNSS measurements with hAcc larger than 3m
+            not_outage_idxs = find(obj.raw_data.gnss.hAcc < 5); % Remove GNSS measurements with hAcc larger than 3m
             obj.raw_data.gnss.t = obj.raw_data.gnss.t(not_outage_idxs);
             obj.raw_data.gnss.pos = obj.raw_data.gnss.pos(not_outage_idxs,:);
             obj.raw_data.gnss.hAcc = obj.raw_data.gnss.hAcc(not_outage_idxs);
@@ -447,11 +447,14 @@ classdef dataprocessor < handle
                 end
             end
 
-           
+            % Scenario 1
+%             LC_intvs = LC_intvs(1:end-1,:);
+%             LC_dirs = LC_dirs(1:end-1);
+
             obj.proc_data.can.LC_intvs = LC_intvs;
             obj.proc_data.lane.LC_dirs = LC_dirs;
-                
             
+
 %             figure(1);
 %             plot(obj.raw_data.can.t,obj.raw_data.can.leftBlinker,'r-'); hold on; grid on;
 %             plot(obj.raw_data.can.t,obj.raw_data.can.rightBlinker,'b-');
@@ -504,17 +507,17 @@ classdef dataprocessor < handle
             %% Remove Pure Left/Right Turns from lane change
              % Remove last "right turn" as it is not a lane change scenario
             % This part should be changed for other dataset
-%             LC_intvs(4,:) = [LC_intvs(4,1) LC_intvs(5,2)];
-%             LC_intvs(5,:) = [];
-%             LC_dirs(4) = [];
-%             LC_intvs = LC_intvs(1:end-1,:);
-%             LC_dirs = LC_dirs(1:end-1);
-            laneFactorValidIntvs(4,:) = [laneFactorValidIntvs(4,1), laneFactorValidIntvs(5,2), ...
-                                         laneFactorValidIntvs(5,2) - laneFactorValidIntvs(4,1)+1];
-            laneFactorValidIntvs(5,:) = [];
+
+
+
             
-            obj.proc_data.lane.FactorValidIntvs = laneFactorValidIntvs;
-            obj.proc_data.lane.LC_dirs(4) = [];
+            % Scenario 2
+%             laneFactorValidIntvs(4,:) = [laneFactorValidIntvs(4,1), laneFactorValidIntvs(5,2), ...
+%                                          laneFactorValidIntvs(5,2) - laneFactorValidIntvs(4,1)+1];
+%             laneFactorValidIntvs(5,:) = [];
+%             laneFactorValidIntvs(end,1) = laneFactorValidIntvs(end,1) + 10;
+%             obj.proc_data.lane.FactorValidIntvs = laneFactorValidIntvs;
+%             obj.proc_data.lane.LC_dirs(4) = [];
 
         end
         

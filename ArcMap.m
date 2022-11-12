@@ -65,6 +65,8 @@ classdef ArcMap < handle
         max_err
         valid_flag = false
         dummy = struct() % Dummy variable for debugging
+        cubicFit = {}
+        arcFit = {}
     end
     
     %% Public Methods
@@ -102,20 +104,80 @@ classdef ArcMap < handle
 %             obj.assocR = obj.assocL;
 %             
 %             obj.DataAssociation0();
-%             obj.DataAssociationRem();             
+%             obj.DataAssociationRem();     
+            
+            
+            obj.cubicFit = {};
+            % Perform Cubic Fitting (Comparison with Arc Splines)
+            numSubSeg = 0;
+            disp('[Cubic Spline Approximation Results]')
+            disp('==============================================')
+            for i=1:length(obj.segments)
+                
+                fit = CubicFit(obj.segments{i},obj.covs{i},i);
+                fit.optimize();
+                numSubSeg = numSubSeg + length(fit.segments);
+                disp(['Segment ',num2str(i),': ',num2str(length(fit.segments)),' SubSegments'])
+                obj.cubicFit = [obj.cubicFit, {fit}];
+%                 fit.visualize();
+            end
+            disp('==============================================')
+            disp(['Total number of Segments: ',num2str(length(obj.segments))])
+            disp(['Total number of SubSegments: ',num2str(numSubSeg)])
+            
+            % Arc Fitting tested with EKF : Too many segments
+%             obj.arcFit = {};
+%             % Perform Arc Fitting (Non Continuous)
+%             numSubSeg = 0;
+%             disp('  ')
+%             disp('[Arc Spline Approximation Results]')
+%             disp('==============================================')
+%             for i=1:length(obj.segments)
+%                 
+%                 fit = ArcFitEKF(obj.segments{i},obj.covs{i},i);
+%                 fit.optimize();
+%                 numSubSeg = numSubSeg + length(fit.segments);
+%                 disp(['Segment ',num2str(i),': ',num2str(length(fit.segments)),' SubSegments'])
+%                 obj.arcFit = [obj.arcFit, {fit}];
+%                 fit.visualize();
+%             end
+%             disp('==============================================')
+%             disp(['Total number of Segments: ',num2str(length(obj.segments))])
+%             disp(['Total number of SubSegments: ',num2str(numSubSeg)])
         end    
         
         %% Running Optimization for each Large Segment
         function obj = dummyF(obj)
-            for i=1:length(obj.arc_segments)
-                obj.dummy.initFit = ArcFit(obj.arc_segments{i}, ...
-                                           obj.segments{i}, ...
-                                           obj.ext_segments{i}, ...
-                                           obj.covs{i}, ...
-                                           obj.ext_covs{i},i);    
-                obj.dummy.initFit.optimize();
-                obj.arc_segments{i} = obj.dummy.initFit.getParams();                
+            
+            
+%             for i=1:length(obj.segments)
+%                 
+%                 obj.dummy.initFit = ArcFit2(obj.arc_segments{i}, ...
+%                                             obj.segments{i}, ...                                            
+%                                             obj.covs{i});    
+%                 obj.dummy.initFit.optimize();
+%                 obj.arc_segments{i} = obj.dummy.initFit.getParams();
+%                 
+%             end
+            % Perform Arc Fitting (Non Continuous)
+            obj.arcFit = {};
+            numSubSeg = 0;
+%             disp('  ')
+            disp('[Arc Spline Approximation Results]')
+            disp('==============================================')
+            for i=1:length(obj.segments)
+                
+                fit = ArcFitEKF(obj.segments{i},obj.covs{i},i);
+                fit.optimize();
+                numSubSeg = numSubSeg + length(fit.segments);
+                disp(['Segment ',num2str(i),': ',num2str(length(fit.segments)),' SubSegments'])
+                obj.arcFit = [obj.arcFit, {fit}];
+                fit.visualize();
+                
             end
+            disp('==============================================')
+            disp(['Total number of Segments: ',num2str(length(obj.segments))])
+            disp(['Total number of SubSegments: ',num2str(numSubSeg)])
         end
 
         %% Map Update for 
@@ -346,22 +408,22 @@ classdef ArcMap < handle
 
             obj.segments = {};
             obj.covs = {};
-            obj.ext_segments = {}; % initialize segments variable again
-            obj.ext_covs = {};
+%             obj.ext_segments = {}; % initialize segments variable again
+%             obj.ext_covs = {};
             n = size(obj.lane.FactorValidIntvs,1);            
             
             for i=1:n+1
                 obj.segments = [obj.segments {[]}];
                 obj.covs = [obj.covs {[]}];
-                obj.ext_segments = [obj.ext_segments {[]}];
-                obj.ext_covs = [obj.ext_covs {[]}];                
+%                 obj.ext_segments = [obj.ext_segments {[]}];
+%                 obj.ext_covs = [obj.ext_covs {[]}];                
             end
 
             for i=1:n
                 lb = obj.lane.FactorValidIntvs(i,1);
                 ub = obj.lane.FactorValidIntvs(i,2);
                 Left0 = []; Right0 = []; LeftCov0 = []; RightCov0 = [];
-                Left = []; Right = []; LeftCovR = []; RightCovR = [];                
+%                 Left = []; Right = []; LeftCovR = []; RightCovR = [];                
             
                 for j=lb:ub
                     R = obj.states{j}.R;
@@ -370,9 +432,9 @@ classdef ArcMap < handle
 %                     R2d = [cos(psi), -sin(psi);
 %                            sin(psi), cos(psi)];
                     
-                    lane_idx = obj.lane.state_idxs(j);
-                    Lprob = obj.lane.prob(lane_idx,2);
-                    Rprob = obj.lane.prob(lane_idx,3);
+%                     lane_idx = obj.lane.state_idxs(j);
+%                     Lprob = obj.lane.prob(lane_idx,2);
+%                     Rprob = obj.lane.prob(lane_idx,3);
                     
                     LeftL = P + R * obj.states{j}.left(:,1);
                     RightL = P + R * obj.states{j}.right(:,1);
@@ -381,23 +443,23 @@ classdef ArcMap < handle
                     LeftCov0 = [LeftCov0, obj.LeftCov(4*j-3:4*j,1)];
                     RightCov0 = [RightCov0, obj.RightCov(4*j-3:4*j,1)];                    
                     
-                    % Add more lane measurements 
-                    if Lprob > obj.lane_prob_thres && Rprob > obj.lane_prob_thres
-
-                        for k=2:obj.lane.prev_num
-                            Lstd = obj.lane.lystd(lane_idx,k);
-                            Rstd = obj.lane.rystd(lane_idx,k);
-                            
-                            LeftL = P + R * obj.states{j}.left(:,k);
-                            RightL = P + R * obj.states{j}.right(:,k);
-                            if Lstd < 3.4 && Rstd < 3.4
-                                Left = [Left, LeftL(1:2)];
-                                Right = [Right, RightL(1:2)];
-                                LeftCovR = [LeftCovR, obj.LeftCov(4*j-3:4*j,k)];
-                                RightCovR = [RightCovR, obj.RightCov(4*j-3:4*j,k)];
-                            end
-                        end                        
-                    end                    
+%                     % Add more lane measurements 
+%                     if Lprob > obj.lane_prob_thres && Rprob > obj.lane_prob_thres
+% 
+%                         for k=2:obj.lane.prev_num
+%                             Lstd = obj.lane.lystd(lane_idx,k);
+%                             Rstd = obj.lane.rystd(lane_idx,k);
+%                             
+%                             LeftL = P + R * obj.states{j}.left(:,k);
+%                             RightL = P + R * obj.states{j}.right(:,k);
+%                             if Lstd < 3.4 && Rstd < 3.4
+%                                 Left = [Left, LeftL(1:2)];
+%                                 Right = [Right, RightL(1:2)];
+%                                 LeftCovR = [LeftCovR, obj.LeftCov(4*j-3:4*j,k)];
+%                                 RightCovR = [RightCovR, obj.RightCov(4*j-3:4*j,k)];
+%                             end
+%                         end                        
+%                     end                    
                 end                
                 
                 obj.segments{obj.segment_info(1,i)} = [obj.segments{obj.segment_info(1,i)} Left0];
@@ -405,67 +467,67 @@ classdef ArcMap < handle
                 obj.covs{obj.segment_info(1,i)} = [obj.covs{obj.segment_info(1,i)} LeftCov0];
                 obj.covs{obj.segment_info(2,i)} = [obj.covs{obj.segment_info(2,i)} RightCov0];
 
-                obj.ext_segments{obj.segment_info(1,i)} = [obj.ext_segments{obj.segment_info(1,i)} Left];
-                obj.ext_segments{obj.segment_info(2,i)} = [obj.ext_segments{obj.segment_info(2,i)} Right];
-                obj.ext_covs{obj.segment_info(1,i)} = [obj.ext_covs{obj.segment_info(1,i)} LeftCovR];
-                obj.ext_covs{obj.segment_info(2,i)} = [obj.ext_covs{obj.segment_info(2,i)} RightCovR];
+%                 obj.ext_segments{obj.segment_info(1,i)} = [obj.ext_segments{obj.segment_info(1,i)} Left];
+%                 obj.ext_segments{obj.segment_info(2,i)} = [obj.ext_segments{obj.segment_info(2,i)} Right];
+%                 obj.ext_covs{obj.segment_info(1,i)} = [obj.ext_covs{obj.segment_info(1,i)} LeftCovR];
+%                 obj.ext_covs{obj.segment_info(2,i)} = [obj.ext_covs{obj.segment_info(2,i)} RightCovR];
             end
 
-            disp('[Eliminating invalid extensions...]')
-            % Eliminate points that are outside of the region of interest
-            for i=1:length(obj.segments) 
-                seg = obj.segments{i};
-                ext_seg = obj.ext_segments{i};
-                org_n = size(ext_seg,2);
-                bools = [];
-                % 
-                valid = false;
-                j = 0;
-%                 if i == 10
-%                     figure(1);hold on; grid on; axis equal;
-%                     plot(seg(1,:),seg(2,:),'r.'); 
-%                     plot(ext_seg(1,:),ext_seg(2,:),'b.');
-%                     disp(length(ext_seg))
+%             disp('[Eliminating invalid extensions...]')
+%             % Eliminate points that are outside of the region of interest
+%             for i=1:length(obj.segments) 
+%                 seg = obj.segments{i};
+%                 ext_seg = obj.ext_segments{i};
+%                 org_n = size(ext_seg,2);
+%                 bools = [];
+%                 % 
+%                 valid = false;
+%                 j = 0;
+% %                 if i == 10
+% %                     figure(1);hold on; grid on; axis equal;
+% %                     plot(seg(1,:),seg(2,:),'r.'); 
+% %                     plot(ext_seg(1,:),ext_seg(2,:),'b.');
+% %                     disp(length(ext_seg))
+% %                 end
+%                 if org_n > 0
+%                     while ~valid
+%                         j = j + 1;
+% 
+%                         % May need to change 10 to other larger values for
+%                         % more accurate removal
+%                         valid = obj.isMatched(seg(:,end-10:end),ext_seg(:,j)); 
+%                         if valid
+%                             flag = true;
+%                             break;
+%                         else
+%                             bools = [bools true];
+%                             
+%                             if j == org_n % No Valid Match (Too short segment)
+%                                 obj.ext_segments{i} = [];
+%                                 new_n = size(obj.ext_segments{i},2);
+%                                 disp(['[Segment ',num2str(i),'] : ',num2str(org_n-new_n),' points discarded'])
+%                                 flag = false;
+%                                 break;
+%                             end
+%                         end                    
+%                     end                
+%                     
+%                     if flag
+%     %                     disp(num2str(i))
+%                         while j <= length(ext_seg)
+%                             indc = obj.isMatched(seg,ext_seg(:,j));
+%                             bools = [bools indc];    
+%                             j = j + 1;
+%                         end
+%                         
+%                         obj.ext_segments{i} = ext_seg(:,bools == 1);
+%                         new_n = size(obj.ext_segments{i},2);
+%                         disp(['[Segment ',num2str(i),'] : ',num2str(org_n-new_n),' points discarded'])
+%                     end
+%                 else
+%                     disp(['[Segment ',num2str(i),'] : Already Empty!'])
 %                 end
-                if org_n > 0
-                    while ~valid
-                        j = j + 1;
-
-                        % May need to change 10 to other larger values for
-                        % more accurate removal
-                        valid = obj.isMatched(seg(:,end-10:end),ext_seg(:,j)); 
-                        if valid
-                            flag = true;
-                            break;
-                        else
-                            bools = [bools true];
-                            
-                            if j == org_n % No Valid Match (Too short segment)
-                                obj.ext_segments{i} = [];
-                                new_n = size(obj.ext_segments{i},2);
-                                disp(['[Segment ',num2str(i),'] : ',num2str(org_n-new_n),' points discarded'])
-                                flag = false;
-                                break;
-                            end
-                        end                    
-                    end                
-                    
-                    if flag
-    %                     disp(num2str(i))
-                        while j <= length(ext_seg)
-                            indc = obj.isMatched(seg,ext_seg(:,j));
-                            bools = [bools indc];    
-                            j = j + 1;
-                        end
-                        
-                        obj.ext_segments{i} = ext_seg(:,bools == 1);
-                        new_n = size(obj.ext_segments{i},2);
-                        disp(['[Segment ',num2str(i),'] : ',num2str(org_n-new_n),' points discarded'])
-                    end
-                else
-                    disp(['[Segment ',num2str(i),'] : Already Empty!'])
-                end
-            end
+%             end
         end
         
         %% Initial Segment Parametrization
@@ -559,7 +621,7 @@ classdef ArcMap < handle
             % save data. Since covariance or weight data of lane points are
             % not available, use rmse error for determining the 'goodness'
             % of circular fitting.
-            rmse_thres = 0.4;
+            rmse_thres = 0.3;
             lb = 1; n = numel(intvL); cnt = 1;
             
             initSegments = {};

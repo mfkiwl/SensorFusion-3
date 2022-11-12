@@ -424,10 +424,9 @@ classdef optimizer < handle
         end
         
         %% Visualize with HD Map
-        function visualizeHD(obj,Link,Node)
+        function visualizeHD(obj,Lane)
             figure(20); hold on; grid on; axis equal;
-            p_l = mapshow(Link); 
-            p_n = mapshow(Node);
+            p_l = mapshow(Lane);             
 
             % Convert vehicle states to UTM-K coords            
             
@@ -442,11 +441,12 @@ classdef optimizer < handle
 
             xlabel('UTM-K X (m)');ylabel('UTM-K Y (m)');
             title('HD Map')
-            legend([p_l, p_n, p_v],'HD Map Link','HD Map Node','Vehicle Trajectory')
+            legend([p_l, p_v],'HD Map Lanes','Vehicle Trajectory')
         end        
         
         %% Plot lane point std values
         function plotConfEllipse(obj,p)
+            % 0 < p < 1 : Confidence Level
             % Left Lane
             figure(1); grid on; axis equal; hold on;
             % i=1:length(obj.states)
@@ -478,6 +478,19 @@ classdef optimizer < handle
             legend([p_l,p_cl,p_cr], ... 
                    'Lane Points','Left Lane Confidence Ellipse','Right Lane Confidence Ellipse')
             
+        end
+
+        %% Plot Vehicle position confidence ellipse
+        function plotConfEllipseV(obj,p)
+            figure(1); grid on; axis equal; hold on;
+            for i=1:length(obj.states)
+                P = obj.states{i}.P;
+                xycov = full(obj.opt.cov(9*(i-1)+7:9*(i-1)+8,9*(i-1)+7:9*(i-1)+8));
+
+                pc = obj.ConfidenceEllipse(P(1:2),xycov,p);
+                plot(P(1),P(2),'k.');
+                plot(pc(1,:),pc(2,:),'c--');
+            end
         end
 
     end

@@ -3,10 +3,22 @@
 
 clear; close all; clc;
 %% Load Raw Data (Not 'really' raw, take a look at 'dataloader.py')
-imu = load('D:\SJ_Dataset\2022-08-05\2022-08-05--02-41-03\results\imu.mat');
-gnss = load('D:\SJ_Dataset\2022-08-05\2022-08-05--02-41-03\results\gnss.mat');
-lane = load('D:\SJ_Dataset\2022-08-05\2022-08-05--02-41-03\results\lane.mat');
-can = load('D:\SJ_Dataset\2022-08-05\2022-08-05--02-41-03\results\can.mat');
+
+% [Sejong Dataset Scenarios]
+% Scenario 1: In the current folder : Challenging Scenario
+% Scenario 2: 2022-08-05--02-41-03 : plot with HD map (BRT)
+% Scenario 3: 2022-08-05--02-57-24 : plot with HD map (세종청사)
+% Scenario 4: 2022-08-05--03-13-16 : dataprocessing error --> need to fix
+% Scenario 5: 2022-08-05--03-45-16 : dataprocessing error --> need to fix
+% Scenario 6: 2022-08-05--04-19-33 : Challenging Scenario 2 (굳이?)
+
+base_path = 'D:\SJ_Dataset\2022-08-05\';
+scenario = '2022-08-05--04-19-33';
+
+imu = load(strcat(base_path,scenario,'\results\imu.mat'));
+gnss = load(strcat(base_path,scenario,'\results\gnss.mat'));
+lane = load(strcat(base_path,scenario,'\results\lane.mat'));
+can = load(strcat(base_path,scenario,'\results\can.mat'));
 
 % imu = load('imu.mat');
 % gnss = load('gnss.mat');
@@ -48,10 +60,10 @@ covs_.imu.GyroscopeBiasNoise = 5e-10 * eye(3);
 covs_.imu.GyroscopeNoise = 1e-5 * eye(3);
 covs_.imu.AccelerometerBiasNoise = 5e-7* eye(3);
 covs_.imu.AccelerometerNoise = 5/3 * 1e-3 * eye(3);
-covs_.imu.ScaleFactorNoise = 1e-4;
+covs_.imu.ScaleFactorNoise = 1e-6;
 
 % WSS 
-covs_.wss = 1e-6 * eye(3);
+covs_.wss = 1e-4 * eye(3);
 
 % Optimization Options
 options = struct();
@@ -110,8 +122,11 @@ sol.full.update('2-phase'); % Update mode to 2-phase
 
 %%
 sol.full.map.dummyF();
+% initArcParams = sol.full.map.arc_segments; % save data
 
-initArcParams = sol.full.map.arc_segments; % save data
+%%
+sol.full.map.dummy.initFit.visualize();
+
 
 %%
 
@@ -139,7 +154,11 @@ sol.full.map.visualize2DMap();
 % cd D:/SJ_Dataset/HDMap/Map2/SEC01_BRT_내부간선도로/HDMap_UTMK_타원체고/
 % cd D:/SJ_Dataset/HDMap/Map2/SEC02_세종정부청사_주변/HDMap_UTMK_타원체고/
 
-T1 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A1_NODE.shp");
-T2 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A2_LINK.shp");
-sol.full.visualizeHD(T1,T2);
+
+% D:\SJ_Dataset\HDMap\Map1\HDMap_UTMK_타원체고\B2_SURFACELINEMARK.shp
+% D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\B2_SURFACELINEMARK.shp
+% D:\SJ_Dataset\HDMap\Map2\SEC02_세종정부청사_주변\HDMap_UTMK_타원체고\B2_SURFACELINEMARK.shp
+
+T1 = readgeotable("D:\SJ_Dataset\HDMap\Map1\HDMap_UTMK_타원체고\B2_SURFACELINEMARK.shp");
+sol.full.visualizeHD(T1);
 
