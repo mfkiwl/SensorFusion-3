@@ -12,7 +12,12 @@ clear; close all; clc;
 % Scenario 5: 2022-08-05--03-45-16 : dataprocessing error --> need to fix
 % Scenario 6: 2022-08-05--04-19-33 : Challenging Scenario 2 (굳이?)
 
-base_path = 'D:\SJ_Dataset\2022-08-05\';
+% Lab Desktop Path
+% base_path = 'D:\SJ_Dataset\2022-08-05\';
+% scenario = '2022-08-05--04-19-33';
+
+% Laptop Path
+base_path = 'C:\Users\user\Desktop\2022\연구\SejongDataset\';
 scenario = '2022-08-05--04-19-33';
 
 imu = load(strcat(base_path,scenario,'\results\imu.mat'));
