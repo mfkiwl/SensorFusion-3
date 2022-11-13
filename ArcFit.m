@@ -13,6 +13,19 @@ classdef ArcFit < handle
     %   * The optimization process is very sensitive to covariance values.
     %   * Choosing inappropriate covariance weights may lead to singularity
     %   in extreme scenarios (Sharp Turn, etc)
+    %
+    %   [Optimization Variables]
+    %   x0, y0, tau0, kappa1, ..., kappaN, L1, ..., LN
+    %   --> Only arc parameters are to be optimized
+    %   
+    %   * 0m previewed lane points and remaining lane points are separately
+    %   considered inside the measurement model
+    %   
+    %   * Since the covariance of lane points are given in 2D format,
+    %   current implementation of ArcFit is not valid for usage.
+    % 
+    %   * ArcFit is deprecated
+    %
     %   Implemented by JinHwan Jeon, 2022
 
     properties(Access = public)

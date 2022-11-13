@@ -1,4 +1,16 @@
 classdef ArcFitEKF < handle
+% ARCFITEKF - Incrementally perform arc spline approximation via EKF
+% 
+% Very fast computational time, not continuous, too many segments
+% The orginal purpose was to quickly retrieve initial guess of arc
+% parameters and perform merging to get continuous arc spline
+% approximation. However, due to the limitation of current estimation
+% method, there are too many segments!
+% 
+% * ArcFitEKF is deprecated
+%
+% Implemented by JinHwan Jeon, 2022
+%
     properties (Access = public)
         id           
         points

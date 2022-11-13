@@ -218,40 +218,42 @@ classdef dataprocessor < handle
                 gyro_n = obj.data.imu{i}.gyro;
                 
                 if i ~= 1 % Continue adding from previous data fragment
-                    t_lb_ = full_t(1);
-                    [~,idx_lb] = min(abs(imu_t - t_lb_));
-                    t_ub = imu_t(idx_lb) - base_t - t_bias;
-                    
-                    imu_.t = t_lb:0.01:t_ub;
-                    if t_ub - imu_.t(end) > 1e-6
-                        imu_.t = [imu_.t t_ub];
+                    if length(full_t) > 1
+                        t_lb_ = full_t(1);
+                        [~,idx_lb] = min(abs(imu_t - t_lb_));
+                        t_ub = imu_t(idx_lb) - base_t - t_bias;
+                        
+                        imu_.t = t_lb:0.01:t_ub;
+                        if t_ub - imu_.t(end) > 1e-6
+                            imu_.t = [imu_.t t_ub];
+                        end
+                        
+                        sampleT = [sampleT, t_ub];
+                        sampleAccel = [sampleAccel; accel_n(idx_lb,:)];
+                        sampleAccelX = sampleAccel(:,1);
+                        sampleAccelY = sampleAccel(:,2);
+                        sampleAccelZ = sampleAccel(:,3);
+                        sampleGyro = [sampleGyro; gyro_n(idx_lb,:)];
+                        sampleGyroX = sampleGyro(:,1);
+                        sampleGyroY = sampleGyro(:,2);
+                        sampleGyroZ = sampleGyro(:,3);
+                        
+                        interpedAccelX = interp1(sampleT,sampleAccelX,imu_.t);
+                        interpedAccelY = interp1(sampleT,sampleAccelY,imu_.t);
+                        interpedAccelZ = interp1(sampleT,sampleAccelZ,imu_.t);
+                        interpedGyroX = interp1(sampleT,sampleGyroX,imu_.t);
+                        interpedGyroY = interp1(sampleT,sampleGyroY,imu_.t);
+                        interpedGyroZ = interp1(sampleT,sampleGyroZ,imu_.t);
+                        
+                        accel_N = [interpedAccelX(1:end-1)' interpedAccelY(1:end-1)' interpedAccelZ(1:end-1)'];
+                        gyro_N = [interpedGyroX(1:end-1)' interpedGyroY(1:end-1)' interpedGyroZ(1:end-1)'];
+                        
+                        imu_.accel = accel_N;
+                        imu_.gyro = gyro_N;
+    
+                        obj.proc_data.imu = [obj.proc_data.imu {imu_}];
+    %                     disp(length(obj.proc_data.imu)) % Check if dt is well defined
                     end
-                    
-                    sampleT = [sampleT, t_ub];
-                    sampleAccel = [sampleAccel; accel_n(idx_lb,:)];
-                    sampleAccelX = sampleAccel(:,1);
-                    sampleAccelY = sampleAccel(:,2);
-                    sampleAccelZ = sampleAccel(:,3);
-                    sampleGyro = [sampleGyro; gyro_n(idx_lb,:)];
-                    sampleGyroX = sampleGyro(:,1);
-                    sampleGyroY = sampleGyro(:,2);
-                    sampleGyroZ = sampleGyro(:,3);
-                    
-                    interpedAccelX = interp1(sampleT,sampleAccelX,imu_.t);
-                    interpedAccelY = interp1(sampleT,sampleAccelY,imu_.t);
-                    interpedAccelZ = interp1(sampleT,sampleAccelZ,imu_.t);
-                    interpedGyroX = interp1(sampleT,sampleGyroX,imu_.t);
-                    interpedGyroY = interp1(sampleT,sampleGyroY,imu_.t);
-                    interpedGyroZ = interp1(sampleT,sampleGyroZ,imu_.t);
-                    
-                    accel_N = [interpedAccelX(1:end-1)' interpedAccelY(1:end-1)' interpedAccelZ(1:end-1)'];
-                    gyro_N = [interpedGyroX(1:end-1)' interpedGyroY(1:end-1)' interpedGyroZ(1:end-1)'];
-                    
-                    imu_.accel = accel_N;
-                    imu_.gyro = gyro_N;
-
-                    obj.proc_data.imu = [obj.proc_data.imu {imu_}];
-%                     disp(length(obj.proc_data.imu)) % Check if dt is well defined
                 end
 
                 for j=1:length(full_t)-1
@@ -273,25 +275,40 @@ classdef dataprocessor < handle
                     
                     obj.proc_data.imu = [obj.proc_data.imu {imu_}];
                 end
-                % Between static time intervals
-                if i ~= length(obj.data.gnss)
-                    
-                    imu_ = struct();
-                    imu_.t = [];
-                    imu_.accel = [];
-                    imu_.gyro = [];
-                    
-                    t_lb = imu_t(idx_ub) - base_t - t_bias;
-                    sampleT = t_lb;
-                    sampleAccel = accel_n(idx_ub,:);
-                    sampleGyro = gyro_n(idx_ub,:);
-%                     for k=idx_ub:length(imu_t)
-%                         t_lb = 
-%                         imu_.t = [imu_.t imu_t(k) - base_t - t_bias];
-%                         imu_.accel = [imu_.accel; accel_n(k,:)];
-%                         imu_.gyro = [imu_.gyro; gyro_n(k,:)];
-%                     end
-                end
+                if length(full_t) == 1                    
+                    n = length(obj.proc_data.imu);
+                    obj.proc_data.full_t(n+1) = [];
+                    obj.proc_data.t(n+1) = [];
+                    rem_idxs = obj.proc_data.gnss.state_idxs(n+2:end);
+                    obj.proc_data.gnss.state_idxs(n+1) = [];
+                    obj.proc_data.gnss.state_idxs(n+1:end) = rem_idxs - 1;
+                    obj.proc_data.gnss.t(n+1) = [];
+                    obj.proc_data.gnss.pos(n+1,:) = [];
+                    obj.proc_data.gnss.hAcc(n+1) = [];
+                    obj.proc_data.gnss.vAcc(n+1) = [];
+                    obj.proc_data.gnss.bearing(n+1) = [];
+                    obj.proc_data.gnss.vNED(n+1,:) = [];
+                else
+                    % Between static time intervals
+                    if i ~= length(obj.data.gnss)
+                        
+                        imu_ = struct();
+                        imu_.t = [];
+                        imu_.accel = [];
+                        imu_.gyro = [];
+                        
+                        t_lb = imu_t(idx_ub) - base_t - t_bias;
+                        sampleT = t_lb;
+                        sampleAccel = accel_n(idx_ub,:);
+                        sampleGyro = gyro_n(idx_ub,:);
+    %                     for k=idx_ub:length(imu_t)
+    %                         t_lb = 
+    %                         imu_.t = [imu_.t imu_t(k) - base_t - t_bias];
+    %                         imu_.accel = [imu_.accel; accel_n(k,:)];
+    %                         imu_.gyro = [imu_.gyro; gyro_n(k,:)];
+    %                     end
+                    end
+                end                
             end
 
             %% If there exists static interval, find bias values
@@ -324,7 +341,7 @@ classdef dataprocessor < handle
                     AccelBiasY = [AccelBiasY accel_(i,2)];
                     AccelBiasZ = [AccelBiasZ accel_(i,3) - 9.81]; % Change if data is in ENU format
                 elseif accel_t(i) > static_intvs(cnt,2)
-                    if cnt == size(static_intvs)
+                    if cnt == size(static_intvs,1)
                         break;
                     else
                         cnt = cnt + 1;
@@ -339,7 +356,7 @@ classdef dataprocessor < handle
                     GyroBiasY = [GyroBiasY gyro_(i,2)];
                     GyroBiasZ = [GyroBiasZ gyro_(i,3)];
                 elseif gyro_t(i) > static_intvs(cnt,2)
-                    if cnt == size(static_intvs)
+                    if cnt == size(static_intvs,1)
                         break;
                     else
                         cnt = cnt + 1;
@@ -513,12 +530,12 @@ classdef dataprocessor < handle
 
             
             % Scenario 2
-%             laneFactorValidIntvs(4,:) = [laneFactorValidIntvs(4,1), laneFactorValidIntvs(5,2), ...
-%                                          laneFactorValidIntvs(5,2) - laneFactorValidIntvs(4,1)+1];
-%             laneFactorValidIntvs(5,:) = [];
-%             laneFactorValidIntvs(end,1) = laneFactorValidIntvs(end,1) + 10;
-%             obj.proc_data.lane.FactorValidIntvs = laneFactorValidIntvs;
-%             obj.proc_data.lane.LC_dirs(4) = [];
+            laneFactorValidIntvs(4,:) = [laneFactorValidIntvs(4,1), laneFactorValidIntvs(5,2), ...
+                                         laneFactorValidIntvs(5,2) - laneFactorValidIntvs(4,1)+1];
+            laneFactorValidIntvs(5,:) = [];
+            laneFactorValidIntvs(end,1) = laneFactorValidIntvs(end,1) + 10;
+            obj.proc_data.lane.FactorValidIntvs = laneFactorValidIntvs;
+            obj.proc_data.lane.LC_dirs(4) = [];
 
         end
         

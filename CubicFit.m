@@ -1,4 +1,21 @@
 classdef CubicFit < handle
+% CubicFit - Incrementally perform cubic spline approximation via EKF
+% 
+% Very fast computational time, not continuous, too many segments
+% Run this script to use as a comparison with the proposed arc spline 
+% optimization framework 
+%
+% * CubicFit is implemented based on the model introduced at paper below
+% 
+% [1] G. -P. Gwon, W. -S. Hur, S. -W. Kim and S. -W. Seo, 
+% "Generation of a Precise and Efficient Lane-Level Road Map for Intelligent Vehicle Systems," 
+% in IEEE Transactions on Vehicular Technology, vol. 66, no. 6, pp. 4517-4533, June 2017, 
+% doi: 10.1109/TVT.2016.2535210.
+% 
+% Here, we simplify the problem and perform estimation at 2D domain
+%
+% Implemented by JinHwan Jeon, 2022
+%
     properties (Access = public)
         id           
         points

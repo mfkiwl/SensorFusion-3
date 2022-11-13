@@ -20,7 +20,9 @@ classdef optimizer < handle
 %   ** GN and LM : no guarantee of convergence to local minima
 %   Recommended to use GN or TR 
 %   When using TR as solver algorithm, need to define parameters.
-%   -TR parameters at 'main.m' should work fine
+%   - TR parameters at 'main.m' should work fine
+%   - There are cases where TR algorithm converges to a weird local optimal
+%     --> Tune model covariance values 
 % 
 %   [Methods] : using OPTIMIZER 
 %   * optimize() : Find optimized solution to SNLS problem

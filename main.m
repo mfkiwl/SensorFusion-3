@@ -8,12 +8,12 @@ clear; close all; clc;
 % Scenario 1: In the current folder : Challenging Scenario
 % Scenario 2: 2022-08-05--02-41-03 : plot with HD map (BRT)
 % Scenario 3: 2022-08-05--02-57-24 : plot with HD map (세종청사)
-% Scenario 4: 2022-08-05--03-13-16 : dataprocessing error --> need to fix
-% Scenario 5: 2022-08-05--03-45-16 : dataprocessing error --> need to fix
+% Scenario 4: 2022-08-05--03-13-16 : plot with HD map (세종청사)
+% Scenario 5: 2022-08-05--03-45-16 : Convergence Error: almost same as sc4
 % Scenario 6: 2022-08-05--04-19-33 : Challenging Scenario 2 (굳이?)
 
 base_path = 'D:\SJ_Dataset\2022-08-05\';
-scenario = '2022-08-05--04-19-33';
+scenario = '2022-08-05--02-41-03';
 
 imu = load(strcat(base_path,scenario,'\results\imu.mat'));
 gnss = load(strcat(base_path,scenario,'\results\gnss.mat'));
@@ -34,8 +34,6 @@ dataset = dataprocessor(imu,gnss,can,lane);
 dataset.process();
 % dataset.visualize();
 
-%% Optimizer Options 
-
 imu_ = dataset.proc_data.imu;
 gnss_ = dataset.proc_data.gnss;
 lane_ = dataset.proc_data.lane;
@@ -44,6 +42,8 @@ bias_ = dataset.proc_data.initBias;
 t_ = dataset.proc_data.t;
 snap = 0;
 
+%% Optimizer Options 
+
 % Covariance Setttings: Prior, Accel & Gyro Noise, Bias randomwalk 
 covs_ = struct();
 % Prior Covariance (Anchoring)
@@ -51,29 +51,29 @@ covs_.prior = struct();
 covs_.prior.R = diag([0.1^2, 0.1^2, 0.1^2]);
 covs_.prior.V = diag([1^2, 1^2, 1^2]);
 covs_.prior.P = diag([5^2, 5^2, 5^2]);
-covs_.prior.Bg = diag([1e-4, 1e-4, 1e-4]);
-covs_.prior.Ba = diag([0.1^2, 0.1, 0.1^2]);
+covs_.prior.Bg = diag([1e-3, 1e-3, 1e-3]);
+covs_.prior.Ba = diag([0.1^2, 0.1^2, 0.1^2]);
 covs_.prior.WSF = 1e-2;
 % covs_.prior.Params = diag([1e-4,1e-6,1e-4]);
 covs_.prior.Params = 1e-5;
 
 % IMU Accel, Gyro noise and bias randomwalk, ScaleFactorNoise
 covs_.imu = struct();
-covs_.imu.GyroscopeBiasNoise = 5e-10 * eye(3);
-covs_.imu.GyroscopeNoise = 1e-5 * eye(3);
-covs_.imu.AccelerometerBiasNoise = 5e-7* eye(3);
+covs_.imu.GyroscopeBiasNoise = 5e-8 * eye(3);
+covs_.imu.GyroscopeNoise = 1e-4 * eye(3);
+covs_.imu.AccelerometerBiasNoise = 5e-6* eye(3);
 covs_.imu.AccelerometerNoise = 5/3 * 1e-3 * eye(3);
-covs_.imu.ScaleFactorNoise = 1e-6;
+covs_.imu.ScaleFactorNoise = 1e-5;
 
 % WSS 
-covs_.wss = 1e-4 * eye(3);
+covs_.wss = diag([1e-2,1e-5,1e-5]);
 
 % Optimization Options
 options = struct();
 options.CostThres = 1e-6;
 options.StepThres = 1e-6;
-options.IterThres = 50;
-options.Algorithm = 'GN';
+options.IterThres = 100;
+options.Algorithm = 'TR';
 % GN : Gauss-Newton (Recommended for fast convergence, may not be stable for severely non-linear cases)
 % LM : Levenberg-Marquardt(Not recommended for batch-wise optimization: wrong convergence)
 % TR : Trust-Region (Recommended for stable convergence, but typically much slower than G-N method)
@@ -86,7 +86,7 @@ options.LM.Ld = 5; % Lambda Decrease divider
 
 % If selected algorithm is TR, need to define parameters additionally
 options.TR = struct();
-options.TR.eta1 = 0.6;
+options.TR.eta1 = 0.5;
 options.TR.eta2 = 0.9;
 options.TR.gamma1 = 0.1;  
 options.TR.gamma2 = 2;
@@ -112,7 +112,7 @@ lane_.minL = 5; % Minimum arc length (to prevent singularity)
 
 % To find warning id of most recent warning, use 'warning('query','last')'
 warning('off','MATLAB:nearlySingularMatrix');
-
+ 
 sol = struct();
 % Optimize with INS + GNSS + WSS Fusion first 
 sol.full = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
@@ -162,6 +162,6 @@ sol.full.map.visualize2DMap();
 % D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\B2_SURFACELINEMARK.shp
 % D:\SJ_Dataset\HDMap\Map2\SEC02_세종정부청사_주변\HDMap_UTMK_타원체고\B2_SURFACELINEMARK.shp
 
-T1 = readgeotable("D:\SJ_Dataset\HDMap\Map1\HDMap_UTMK_타원체고\B2_SURFACELINEMARK.shp");
+T1 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\B2_SURFACELINEMARK.shp");
 sol.full.visualizeHD(T1);
 

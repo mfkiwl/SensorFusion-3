@@ -1,47 +1,47 @@
 classdef ArcMap < handle
-    %ARCMAP - Arc Spline based lane model for SNLS optimization
-    % 
-    %   When optimization mode is updated to '2-phase' in optimizer.m, this
-    %   module is automatically activated. Below is the overall framework 
-    %   of this module.
-    %   
-    %   Input: 
-    %   1. Optimized vehicle state (INS + GNSS + WSS Fusion)
-    %
-    %   2. Lane Measurement Information
-    %
-    %   ===================================================================
-    %   Step 1. Compute lane points using lane measurements and optimized
-    %           vehicle trajectory. Perform point clustering that should be
-    %           on the same lane.
-    %   
-    %   Step 2. Using divide & conquer method, find intervals for piecewise
-    %           linear approximation for point cluster obtained at step 1.
-    %           Then, merge linear approximations into arcs with some fixed
-    %           error threshold.
-    %           
-    %   Step 3. Using ArcFit.m, perform NLS optimization to find optimal
-    %           parameter values for the given number of arc parameters in
-    %           step 2.
-    %   
-    %   [From here, Mixed Usage with optimizer.m]
-    % 
-    %   Step 4. Use the results from step 3 as the initial arc spline map
-    %           and perform optimization using previewed lane measurements
-    %           in optimizer.m
-    % 
-    %   Step 5. Every iteration, perform data association(which lane 
-    %           measurement belongs to which Sub-segment). 
-    %
-    %   Step 6. Fully converge with fixed number of Sub-segments. Validate
-    %           current optimization results with lane measurement
-    %           reliability data. 
-    % 
-    %   Step 7. If invalid, add new segment to the current map and repeat
-    %           steps 4 ~ 6. If valid, end optimization.
-    %   ===================================================================
-    %   
-    %   Implemented by JinHwan Jeon, 2022
+%ARCMAP - Arc Spline based lane model for SNLS optimization
+% 
+%   When optimization mode is updated to '2-phase' in optimizer.m, this
+%   module is automatically activated. Below is the overall framework 
+%   of this module.
+%   
+%   Input: 
+%   1. Optimized vehicle state (INS + GNSS + WSS Fusion)
+%
+%   2. Lane Measurement Information
+%
+%   ===================================================================
+%   Step 1. Compute lane points using lane measurements and optimized
+%           vehicle trajectory. Perform point clustering that should be
+%           on the same lane.
+%   
+%   Step 2. Using divide & conquer method, find intervals for piecewise
+%           linear approximation for point cluster obtained at step 1.
+%           Then, merge linear approximations into arcs with some fixed
+%           error threshold.
+%           
+%   Step 3. Using ArcFit.m, perform NLS optimization to find optimal
+%           parameter values for the given number of arc parameters in
+%           step 2.
+%   
+%   [From here, Mixed Usage with optimizer.m]
+% 
+%   Step 4. Use the results from step 3 as the initial arc spline map
+%           and perform optimization using previewed lane measurements
+%           in optimizer.m
+% 
+%   Step 5. Every iteration, perform data association(which lane 
+%           measurement belongs to which Sub-segment). 
+%
+%   Step 6. Fully converge with fixed number of Sub-segments. Validate
+%           current optimization results with lane measurement
+%           reliability data. 
+% 
+%   Step 7. If invalid, add new segment to the current map and repeat
+%           steps 4 ~ 6. If valid, end optimization.
+%   ===================================================================
+%   
+%   Implemented by JinHwan Jeon, 2022
 
     properties (Access = public)
         states
@@ -125,7 +125,7 @@ classdef ArcMap < handle
             disp(['Total number of Segments: ',num2str(length(obj.segments))])
             disp(['Total number of SubSegments: ',num2str(numSubSeg)])
             
-            % Arc Fitting tested with EKF : Too many segments
+            % Arc Fitting tested with EKF : Too many segments (Deprecated)
 %             obj.arcFit = {};
 %             % Perform Arc Fitting (Non Continuous)
 %             numSubSeg = 0;
@@ -150,34 +150,17 @@ classdef ArcMap < handle
         function obj = dummyF(obj)
             
             
-%             for i=1:length(obj.segments)
-%                 
-%                 obj.dummy.initFit = ArcFit2(obj.arc_segments{i}, ...
-%                                             obj.segments{i}, ...                                            
-%                                             obj.covs{i});    
-%                 obj.dummy.initFit.optimize();
-%                 obj.arc_segments{i} = obj.dummy.initFit.getParams();
-%                 
-%             end
-            % Perform Arc Fitting (Non Continuous)
-            obj.arcFit = {};
-            numSubSeg = 0;
-%             disp('  ')
-            disp('[Arc Spline Approximation Results]')
-            disp('==============================================')
             for i=1:length(obj.segments)
                 
-                fit = ArcFitEKF(obj.segments{i},obj.covs{i},i);
-                fit.optimize();
-                numSubSeg = numSubSeg + length(fit.segments);
-                disp(['Segment ',num2str(i),': ',num2str(length(fit.segments)),' SubSegments'])
-                obj.arcFit = [obj.arcFit, {fit}];
-                fit.visualize();
+                obj.dummy.initFit = ArcFit2(obj.arc_segments{i}, ...
+                                            obj.segments{i}, ...                                            
+                                            obj.covs{i},i);    
+                obj.dummy.initFit.optimize();
+                obj.arc_segments{i} = obj.dummy.initFit.getParams();
                 
             end
-            disp('==============================================')
-            disp(['Total number of Segments: ',num2str(length(obj.segments))])
-            disp(['Total number of SubSegments: ',num2str(numSubSeg)])
+           
+            
         end
 
         %% Map Update for 
