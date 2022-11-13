@@ -12,12 +12,7 @@ clear; close all; clc;
 % Scenario 5: 2022-08-05--03-45-16 : dataprocessing error --> need to fix
 % Scenario 6: 2022-08-05--04-19-33 : Challenging Scenario 2 (굳이?)
 
-% Lab Desktop Path
-% base_path = 'D:\SJ_Dataset\2022-08-05\';
-% scenario = '2022-08-05--04-19-33';
-
-% Laptop Path
-base_path = 'C:\Users\user\Desktop\2022\연구\SejongDataset\';
+base_path = 'D:\SJ_Dataset\2022-08-05\';
 scenario = '2022-08-05--04-19-33';
 
 imu = load(strcat(base_path,scenario,'\results\imu.mat'));
@@ -30,6 +25,9 @@ can = load(strcat(base_path,scenario,'\results\can.mat'));
 % lane = load('lane.mat');
 % can = load('can.mat');
 % snap = load('snap_raw.mat');
+
+figure(25);
+geoplot(gnss.pos(:,1),gnss.pos(:,2),'r.')
 
 %% Pre Process raw data
 dataset = dataprocessor(imu,gnss,can,lane);
