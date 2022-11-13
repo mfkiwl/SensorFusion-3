@@ -101,6 +101,7 @@ classdef dataprocessor < handle
 %             plot(gyro_(:,3),'b-');
 
             cnt = 1;
+            
             % Need to fix if vehicle is not stopping near the final part of
             % dataset
             for i=1:length(obj.raw_data.gnss.t)
