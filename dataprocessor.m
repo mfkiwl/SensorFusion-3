@@ -466,8 +466,8 @@ classdef dataprocessor < handle
             end
 
             % Scenario 1
-%             LC_intvs = LC_intvs(1:end-1,:);
-%             LC_dirs = LC_dirs(1:end-1);
+            LC_intvs = LC_intvs(1:end-1,:);
+            LC_dirs = LC_dirs(1:end-1);
 
             obj.proc_data.can.LC_intvs = LC_intvs;
             obj.proc_data.lane.LC_dirs = LC_dirs;
@@ -530,12 +530,12 @@ classdef dataprocessor < handle
 
             
             % Scenario 2
-            laneFactorValidIntvs(4,:) = [laneFactorValidIntvs(4,1), laneFactorValidIntvs(5,2), ...
-                                         laneFactorValidIntvs(5,2) - laneFactorValidIntvs(4,1)+1];
-            laneFactorValidIntvs(5,:) = [];
-            laneFactorValidIntvs(end,1) = laneFactorValidIntvs(end,1) + 10;
-            obj.proc_data.lane.FactorValidIntvs = laneFactorValidIntvs;
-            obj.proc_data.lane.LC_dirs(4) = [];
+%             laneFactorValidIntvs(4,:) = [laneFactorValidIntvs(4,1), laneFactorValidIntvs(5,2), ...
+%                                          laneFactorValidIntvs(5,2) - laneFactorValidIntvs(4,1)+1];
+%             laneFactorValidIntvs(5,:) = [];
+%             laneFactorValidIntvs(end,1) = laneFactorValidIntvs(end,1) + 15;
+%             obj.proc_data.lane.FactorValidIntvs = laneFactorValidIntvs;
+%             obj.proc_data.lane.LC_dirs(4) = [];
 
         end
         

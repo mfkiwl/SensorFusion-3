@@ -119,7 +119,7 @@ classdef ArcMap < handle
                 numSubSeg = numSubSeg + length(fit.segments);
                 disp(['Segment ',num2str(i),': ',num2str(length(fit.segments)),' SubSegments'])
                 obj.cubicFit = [obj.cubicFit, {fit}];
-%                 fit.visualize();
+                fit.visualize();
             end
             disp('==============================================')
             disp(['Total number of Segments: ',num2str(length(obj.segments))])
@@ -149,15 +149,16 @@ classdef ArcMap < handle
         %% Running Optimization for each Large Segment
         function obj = dummyF(obj)
             
-            
-            for i=1:length(obj.segments)
+            obj.arcFit = {};
+            for i=10:length(obj.segments)
                 
-                obj.dummy.initFit = ArcFit2(obj.arc_segments{i}, ...
+                initFit = ArcFit(obj.arc_segments{i}, ...
                                             obj.segments{i}, ...                                            
                                             obj.covs{i},i);    
-                obj.dummy.initFit.optimize();
-                obj.arc_segments{i} = obj.dummy.initFit.getParams();
-                
+                initFit.optimize();
+                obj.arcFit = [obj.arcFit, {initFit}];
+%                 obj.arc_segments{i} = obj.dummy.initFit.getParams();
+                error('1')
             end
            
             

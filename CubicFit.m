@@ -69,7 +69,7 @@ classdef CubicFit < handle
                     Sk = 0;
                     point_id = i;
                     Xkk = zeros(9,1);
-                    Xkk(2) = obj.points(1,i); Xkk(6) = obj.points(2,i);
+%                     Xkk(2) = obj.points(1,i); Xkk(6) = obj.points(2,i);
                     Pkk = diag([0,0,1e2,1e2,1e2,0,1e2,1e2,1e2]);
 
                 else
