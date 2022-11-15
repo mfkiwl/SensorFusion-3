@@ -150,11 +150,11 @@ classdef ArcMap < handle
         function obj = dummyF(obj)
             
             obj.arcFit = {};
-            for i=10:length(obj.segments)
+            for i=4:length(obj.segments)
                 
                 initFit = ArcFit(obj.arc_segments{i}, ...
-                                            obj.segments{i}, ...                                            
-                                            obj.covs{i},i);    
+                                 obj.segments{i}, ...                                            
+                                 obj.covs{i},i);    
                 initFit.optimize();
                 obj.arcFit = [obj.arcFit, {initFit}];
 %                 obj.arc_segments{i} = obj.dummy.initFit.getParams();

@@ -68,8 +68,10 @@ classdef CubicFit < handle
                     % Initialize new segment
                     Sk = 0;
                     point_id = i;
+%                     x = Xkk(2); y = Xkk(6);
                     Xkk = zeros(9,1);
-%                     Xkk(2) = obj.points(1,i); Xkk(6) = obj.points(2,i);
+                    Xkk(2) = obj.points(1,i); Xkk(6) = obj.points(2,i);
+%                     Xkk(2) = x; Xkk(6) = y;
                     Pkk = diag([0,0,1e2,1e2,1e2,0,1e2,1e2,1e2]);
 
                 else

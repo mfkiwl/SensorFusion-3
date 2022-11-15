@@ -32,9 +32,10 @@ classdef ArcFit < handle
         valid = false % Validity of current optimized parameter set
         validity % Number of invalid points for each segment
         assoc % Indicates which segment index the data point is matched to
-        matchedPoints
-        Ndist
+        matchedPoints % Matched arc points (for each data point)
+        Ndist % Normalized Mahalanobis distance (Weighted Error)
         precomp_jac = struct() % Not Used: Deprecated (Fast Jacobian Computation)
+        opt = struct() % Optimized results : jacobian, information matrix, covariance matrix
     end
 
     methods(Access = public)        
@@ -57,6 +58,7 @@ classdef ArcFit < handle
             
             while ~obj.valid
                 obj.associate();
+                jac_pattern = obj.getJacPattern();
                 
                 disp(['[Performing Optimization for Segment ID: ',num2str(obj.id),']']) 
                 X0 = [obj.params.x0; obj.params.y0; obj.params.tau0; obj.params.kappa'];
@@ -68,10 +70,11 @@ classdef ArcFit < handle
                 options = optimoptions('lsqnonlin', ...
                                        'UseParallel',true, ...
                                        'Display','iter-detailed', ...
-                                       'MaxFunctionEvaluations',inf, ...    
-                                       'MaxIterations',inf, ...
-                                       'FiniteDifferenceType','central');
-                X = lsqnonlin(@obj.cost_func,X0,lb,ub,options);
+                                       'MaxFunctionEvaluations',3e3, ...    
+                                       'MaxIterations',3e3, ...
+                                       'FiniteDifferenceType','central', ...
+                                       'JacobPattern',jac_pattern);
+                [X,~,~,~,~,~,jacobian] = lsqnonlin(@obj.cost_func,X0,lb,ub,options);
                 
                 obj.params.x0 = X(1);
                 obj.params.y0 = X(2);
@@ -88,8 +91,12 @@ classdef ArcFit < handle
                     disp('[Ending optimization...]')
                     break;
                 end
-                
             end
+            
+            % Save Optimization Results
+            obj.opt.jac = jacobian;
+            obj.opt.info = obj.opt.jac' * obj.opt.jac;
+            obj.opt.cov = sparseinv(obj.opt.info);
         end
         
         %% Visualize: One Segment Optimization
@@ -199,13 +206,6 @@ classdef ArcFit < handle
 %             idxs = 0:1:n;
             idxs = [0,n];
             for i=1:length(idxs)
-%                 if i == 0 || i == n % Tight Anchor for start/end points
-%                     cov = diag([1e-6, 1e-6]); 
-%                 else % Loose Anchor for remaining node points
-%                     cov = diag([0.1^2, 0.1^2]);
-% %                     idx = obj.params.bnds(i,2);
-% %                     cov = reshape(obj.covs(:,idx),2,2);
-%                 end
                 res(2*i-1:2*i) = InvMahalanobis(obj.AMres(initParams,kappa,L,idxs(i)),cov);
             end
         end
@@ -225,6 +225,21 @@ classdef ArcFit < handle
             res = X - point;
         end
         
+        %% Jacobian Pattern for faster jacbian matrix computation
+        function jac_pattern = getJacPattern(obj)
+            n = length(obj.params.kappa);
+            m = size(obj.points,2);
+            blk_width = 3 + n;
+            blk_height = 2 * m + 4;
+            jac_pattern = zeros(blk_height,blk_width);
+            for i=1:m
+                SegIdx = obj.assoc(i);
+                jac_pattern(2*i-1:2*i,1:3+SegIdx) = ones(2,3+SegIdx);
+            end
+            jac_pattern(2*m+1:2*m+2,1:2) = eye(2);
+            jac_pattern(2*m+3:2*m+4,:) = ones(2,3+n);
+        end
+
         %% Data Association
         function obj = associate(obj)
             obj.assoc = zeros(1,size(obj.points,2));
@@ -290,73 +305,69 @@ classdef ArcFit < handle
             n = length(obj.params.kappa);
             bnds = obj.params.bnds;
             kappa = obj.params.kappa;
-            L = obj.params.L;
+
+            % Test 
+            % 1: Simply halve given idx bnds
+            % 2: Pick idx with largest error --> if bnds is picked, then
+            % simply halve idxs
+            mode = 2; % 2
+            if mode == 2
+                idxs = find(obj.assoc == SegIdx);
+                sampledNdist = obj.Ndist(idxs);
+                [~,loc_idx] = max(sampledNdist);
+                if loc_idx == 1 || loc_idx == length(sampledNdist)
+                    mode = 1;
+                else
+                    idx1 = obj.params.bnds(SegIdx,1) - 1 + loc_idx;
+                end
+            end
 
             if SegIdx == 1
-                rem_bnds = obj.params.bnds(3:end,:);
-                idx1 = floor(sum(bnds(1,:))/2);
-                idx2 = floor((idx1 + bnds(2,2))/2);
-                new_bnds = [bnds(1,1), idx1;
-                            idx1, idx2;
-                            idx2,bnds(2,2)];
-                obj.params.bnds = vertcat(new_bnds,rem_bnds);
-                
+                if mode == 1 % Halve bnds idxs                    
+                    idx1 = floor(sum(bnds(1,:))/2);                     
+                end
+%                 rem_bnds = obj.params.bnds(2:end,:);
+%                 obj.params.bnds = [bnds(1,1), idx1;
+%                                    idx1, bnds(1,2);
+%                                    rem_bnds];
+
+                % Modified version of index re-assignment
+                Prev = [bnds(1,1), idx1];
+                Next = [idx1, bnds(1,2);
+                        bnds(2:end,:)];
+                PropNext = obj.BackPropIdxs(Next,'next');
+                obj.params.bnds = vertcat(Prev,PropNext);
+
                 rem_kappa = obj.params.kappa(2:end);
                 obj.params.kappa = [kappa(SegIdx), kappa(SegIdx), rem_kappa];
-
-%                 rem_L = obj.params.L(3:end);
-%                 L1 = 1/2 * L(SegIdx);
-%                 L2 = 1/2 * (L1 + L(SegIdx+1));
-%                 obj.params.L = [L1, L2, L2, rem_L];
-%                 rem_L = obj.params.L(2:end);
-%                 L1 = 1/2 * L(SegIdx);
-%                 obj.params.L = [L1, L1, rem_L];
                 
-            elseif SegIdx == n
-                rem_bnds = obj.params.bnds(1:end-2,:);
-                idx1 = floor(sum(bnds(end,:))/2);
-                idx2 = floor((idx1 + bnds(end-1,1))/2);
-                new_bnds = [bnds(end-1,1), idx2;
-                            idx2, idx1;
-                            idx1, bnds(end,2)];
-                obj.params.bnds = vertcat(rem_bnds,new_bnds);
+            elseif SegIdx == n                
+                if mode == 1
+                    idx1 = floor(sum(bnds(SegIdx,:))/2);
+                end
+                rem_bnds = obj.params.bnds(1:end-1,:);
+                obj.params.bnds = [rem_bnds;
+                                   bnds(end,1), idx1;
+                                   idx1, bnds(end,2)];
 
                 rem_kappa = obj.params.kappa(1:end-1);
                 obj.params.kappa = [rem_kappa, kappa(SegIdx), kappa(SegIdx)];
 
-%                 rem_L = obj.params.L(1:end-2);
-%                 L1 = 1/2 * L(SegIdx);
-%                 L2 = 1/2 * (L1 + L(SegIdx-1));
-%                 obj.params.L = [rem_L, L2, L2, L1];
-%                 rem_L = obj.params.L(1:end-1);
-%                 L1 = 1/2 * L(SegIdx);
-%                 obj.params.L = [rem_L, L1, L1];
-
             else
-                rem_bndsP = obj.params.bnds(1:SegIdx-2,:);
-                rem_bndsN = obj.params.bnds(SegIdx+2:end,:);
-                idx1 = floor(sum(bnds(SegIdx,:))/2);
-                idx2P = floor((idx1 + bnds(SegIdx-1,1))/2);
-                idx2N = floor((idx1 + bnds(SegIdx+1,2))/2);
-                new_bnds = [bnds(SegIdx-1,1), idx2P;
-                            idx2P, idx1;
-                            idx1, idx2N;
-                            idx2N, bnds(SegIdx+1,2)];
-                obj.params.bnds = vertcat(rem_bndsP,new_bnds,rem_bndsN);
+                if mode == 1
+                    idx1 = floor(sum(bnds(SegIdx,:))/2);
+                end
+                rem_bndsP = obj.params.bnds(1:SegIdx-1,:);
+                rem_bndsN = obj.params.bnds(SegIdx+1:end,:);
+                obj.params.bnds = [rem_bndsP;
+                                   bnds(SegIdx,1), idx1;
+                                   idx1, bnds(SegIdx,2);
+                                   rem_bndsN]; 
 
                 rem_kappaP = obj.params.kappa(1:SegIdx-1);
                 rem_kappaN = obj.params.kappa(SegIdx+1:end);
                 obj.params.kappa = [rem_kappaP, kappa(SegIdx), kappa(SegIdx), rem_kappaN];
 
-%                 rem_LP = obj.params.L(1:SegIdx-2);
-%                 rem_LN = obj.params.L(SegIdx+2:end);
-%                 L1 = 1/2 * (L(SegIdx-1) + 1/2 * L(SegIdx));
-%                 L2 = 1/2 * (L(SegIdx+1) + 1/2 * L(SegIdx)); 
-%                 obj.params.L = [rem_LP, L1, L1, L2, L2, rem_LN];
-%                 rem_LP = obj.params.L(1:SegIdx-1);
-%                 rem_LN = obj.params.L(SegIdx+1:end);
-%                 L1 = 1/2 * L(SegIdx);
-%                 obj.params.L = [rem_LP, L1, L1, rem_LN];
             end
         end
         
@@ -536,5 +547,9 @@ classdef ArcFit < handle
             end
         end        
         
+        %% BackPropagate Data Indices
+        function Idxs = BackPropIdxs(arr,flag)
+            
+        end
     end
 end
