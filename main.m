@@ -26,8 +26,8 @@ can = load(strcat(base_path,scenario,'\results\can.mat'));
 % can = load('can.mat');
 % snap = load('snap_raw.mat');
 
-figure(25);
-geoplot(gnss.pos(:,1),gnss.pos(:,2),'r.')
+% figure(25);
+% geoplot(gnss.pos(:,1),gnss.pos(:,2),'r.')
 
 %% Pre Process raw data
 dataset = dataprocessor(imu,gnss,can,lane);
@@ -59,20 +59,21 @@ covs_.prior.Params = 1e-5;
 
 % IMU Accel, Gyro noise and bias randomwalk, ScaleFactorNoise
 covs_.imu = struct();
-covs_.imu.GyroscopeBiasNoise = 5e-8 * eye(3);
-covs_.imu.GyroscopeNoise = 1e-4 * eye(3);
-covs_.imu.AccelerometerBiasNoise = 5e-6* eye(3);
+covs_.imu.GyroscopeBiasNoise = 5e-9 * eye(3);
+covs_.imu.GyroscopeNoise = 1e-5 * eye(3);
+covs_.imu.AccelerometerBiasNoise = 5e-7* eye(3);
 covs_.imu.AccelerometerNoise = 5/3 * 1e-3 * eye(3);
 covs_.imu.ScaleFactorNoise = 1e-5;
 
 % WSS 
-covs_.wss = diag([1e-2,1e-5,1e-5]);
+% covs_.wss = diag([1e-2,1e-5,1e-5]);
+covs_.wss = 1e-4 * eye(3);
 
 % Optimization Options
 options = struct();
 options.CostThres = 1e-6;
 options.StepThres = 1e-6;
-options.IterThres = 300;
+options.IterThres = 500;
 options.Algorithm = 'TR';
 % GN : Gauss-Newton (Recommended for fast convergence, may not be stable for severely non-linear cases)
 % LM : Levenberg-Marquardt(Not recommended for batch-wise optimization: wrong convergence)
@@ -128,7 +129,9 @@ sol.full.map.dummyF();
 % initArcParams = sol.full.map.arc_segments; % save data
 
 %%
-sol.full.map.dummy.initFit.visualize();
+sol.full.map.dummy2();
+%%
+sol.full.map.dummy3();
 
 
 %%
@@ -149,7 +152,7 @@ sol.full.visualize();
 
 %% 
 sol.full.map.visualize2DMap();
-
+saved_map = sol.full.map; %% Save data 
 %% Compare with HD Map
 % HD Map Data obtained from: http://map.ngii.go.kr/ms/pblictn/preciseRoadMap.do
 %
@@ -164,4 +167,10 @@ sol.full.map.visualize2DMap();
 
 T1 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\B2_SURFACELINEMARK.shp");
 sol.full.visualizeHD(T1);
-
+T2 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A1_NODE.dbf");
+T3 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A2_LINK.dbf");
+% T2 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A1_NODE.shp");
+% mapshow(T2,'Color','red','LineStyle','none','Marker','+');
+% T3 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A2_LINK.shp");
+% % mapshow(T3,'Color','green','LineStyle','--','Marker','o','MarkerEdgeColor','blue');
+% mapshow(T3,'Color','green','LineStyle','--');

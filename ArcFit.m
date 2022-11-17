@@ -1,5 +1,5 @@
 classdef ArcFit < handle
-    %ArcFit NLS based Arc Spline Optimization given data points
+    %ARCFIT NLS based Arc Spline Optimization given data points
     %
     %   Given data points and initial arc parameters, this solver module
     %   finds the optimal arc parameter set.
@@ -55,9 +55,13 @@ classdef ArcFit < handle
         
         %% Optimize
         function obj = optimize(obj)
-            
+            obj.associate();
+            % Perform ArcBaseFit to get stablized arc parameters
+            obj.TestArcFitBase();
+
             while ~obj.valid
                 obj.associate();
+
                 jac_pattern = obj.getJacPattern();
                 
                 disp(['[Performing Optimization for Segment ID: ',num2str(obj.id),']']) 
@@ -70,9 +74,9 @@ classdef ArcFit < handle
                 options = optimoptions('lsqnonlin', ...
                                        'UseParallel',true, ...
                                        'Display','iter-detailed', ...
-                                       'MaxFunctionEvaluations',3e3, ...    
-                                       'MaxIterations',3e3, ...
-                                       'FiniteDifferenceType','central', ...
+                                       'MaxFunctionEvaluations',3e4, ...    
+                                       'MaxIterations',200, ...
+                                       'FiniteDifferenceType','forward', ...
                                        'JacobPattern',jac_pattern);
                 [X,~,~,~,~,~,jacobian] = lsqnonlin(@obj.cost_func,X0,lb,ub,options);
                 
@@ -81,16 +85,23 @@ classdef ArcFit < handle
                 obj.params.tau0 = X(3);
                 obj.params.kappa = X(3+1:3+n)';
                 [obj.params.L,~] = obj.getArcLength(X(1:3)',obj.params.kappa); 
-    
+%                 break;
                 % Check if current optimized set is truely valid
                 obj.validate();
                 if ~obj.valid
                     % Replicate the most invalid segment
+                    % Node indices are shifted for efficient segmentation
+                    % Since this process will make the optimized parameters
+                    % unstable, ArcFitBase optimization is done to
+                    % stabilize parameters
                     obj.replicate();
                 else
                     disp('[Ending optimization...]')
                     break;
                 end
+%                 figure(100);
+%                 plot(obj.validity)
+
             end
             
             % Save Optimization Results
@@ -103,11 +114,12 @@ classdef ArcFit < handle
         function visualize(obj)
             figure(1);
             p_est = plot(obj.points(1,:),obj.points(2,:),'r.'); hold on; grid on; axis equal;
-            plot(obj.matchedPoints(1,:),obj.matchedPoints(2,:),'b.');            
+%             plot(obj.matchedPoints(1,:),obj.matchedPoints(2,:),'b.');            
             n = length(obj.params.kappa);
             heading = obj.params.tau0;
             SegPoints = [obj.params.x0;
                          obj.params.y0];
+            
             for i=1:n
                 kappa = obj.params.kappa(i); L = obj.params.L(i);
                 headingPrev = heading;
@@ -134,9 +146,21 @@ classdef ArcFit < handle
                    'Lane Sub-segment');
         end
         
-        %% run validation
-        function validation(obj)
-            obj.validate();
+        %% Create ArcFitBase (Test)
+        function obj = TestArcFitBase(obj)
+            ref_idxs = [1, obj.params.bnds(:,2)'];
+            Points = obj.points(:,ref_idxs);
+            bnds = obj.params.bnds;
+            % Add Each Segment's mid points
+            m = 4;
+            for i=1:size(obj.params.bnds,1)
+                idx = floor(linspace(bnds(i,1),bnds(i,2),m));
+                % Check if there is any repeated value in idx
+                Points = [Points, obj.points(:,idx(2:m-1))];
+            end
+            test = ArcFitBase(Points,obj.params,m-2);
+            test.optimize();
+            obj.params = test.params;
         end
 
     end
@@ -148,7 +172,8 @@ classdef ArcFit < handle
             kappa = x0(3+1:3+n);
             % Need to find arc length for each segment
             [Ls,Xcs] = obj.getArcLength(initParams,kappa);
-            
+            obj.opt.L = Ls;
+%             error('1')
             ME_res = obj.CreateMEBlock(kappa,Xcs);
             AM_res = obj.CreateAMBlock(initParams,kappa,Ls);
             res = vertcat(ME_res,AM_res);
@@ -198,14 +223,20 @@ classdef ArcFit < handle
 
         %% Create Anchor Measurement Block
         function res = CreateAMBlock(obj,initParams,kappa,L)
-%             blk_height = 2*(size(obj.params.bnds,1)+1);
-            blk_height = 4;
+            blk_height = 2*(size(obj.params.bnds,1)+1);
+%             blk_height = 4;
             n = length(obj.params.kappa);
             res = zeros(blk_height,1);
-            cov = diag([1e-4, 1e-4]);
-%             idxs = 0:1:n;
-            idxs = [0,n];
+            
+            idxs = 0:1:n;
+%             idxs = [0,n];
             for i=1:length(idxs)
+                if i == 0 || i == length(idxs)
+                    cov = diag([1e-4, 1e-4]);
+                else 
+%                     bnd_idx = obj.params.bnds(idxs(i))
+                    cov = diag([1e-2,1e-2]);
+                end
                 res(2*i-1:2*i) = InvMahalanobis(obj.AMres(initParams,kappa,L,idxs(i)),cov);
             end
         end
@@ -230,14 +261,19 @@ classdef ArcFit < handle
             n = length(obj.params.kappa);
             m = size(obj.points,2);
             blk_width = 3 + n;
-            blk_height = 2 * m + 4;
+%             blk_height = 2 * m + 4;
+            blk_height = 2 * m + 2 * (n+1);
             jac_pattern = zeros(blk_height,blk_width);
             for i=1:m
                 SegIdx = obj.assoc(i);
                 jac_pattern(2*i-1:2*i,1:3+SegIdx) = ones(2,3+SegIdx);
             end
+            
             jac_pattern(2*m+1:2*m+2,1:2) = eye(2);
-            jac_pattern(2*m+3:2*m+4,:) = ones(2,3+n);
+%             jac_pattern(2*m+3:2*m+4,:) = ones(2,3+n);
+            for i=1:n
+                jac_pattern(2*m+2+2*i-1:2*m+2+2*i,1:3+i) = ones(2,3+i); 
+            end
         end
 
         %% Data Association
@@ -261,7 +297,7 @@ classdef ArcFit < handle
             cP = obj.propCenter([obj.params.x0,obj.params.y0,obj.params.tau0], ...
                                  obj.params.kappa, obj.params.L);
             
-            chisq_thres = chi2inv(0.99,2); % 99% Reliability
+            chisq_thres = chi2inv(0.999,2); % 99.9% Reliability
             obj.validity = zeros(1,length(obj.params.kappa));
             obj.matchedPoints = zeros(2,size(obj.points,2));
             obj.Ndist = zeros(1,size(obj.points,2));
@@ -305,70 +341,159 @@ classdef ArcFit < handle
             n = length(obj.params.kappa);
             bnds = obj.params.bnds;
             kappa = obj.params.kappa;
+            L = obj.params.L;
 
             % Test 
             % 1: Simply halve given idx bnds
             % 2: Pick idx with largest error --> if bnds is picked, then
             % simply halve idxs
-            mode = 2; % 2
-            if mode == 2
-                idxs = find(obj.assoc == SegIdx);
-                sampledNdist = obj.Ndist(idxs);
-                [~,loc_idx] = max(sampledNdist);
-                if loc_idx == 1 || loc_idx == length(sampledNdist)
-                    mode = 1;
-                else
-                    idx1 = obj.params.bnds(SegIdx,1) - 1 + loc_idx;
-                end
-            end
+%             mode = 2; % 2
+%             if mode == 2
+%                 idxs = find(obj.assoc == SegIdx);
+%                 sampledNdist = obj.Ndist(idxs);
+%                 [~,loc_idx] = max(sampledNdist);
+%                 if loc_idx == 1 || loc_idx == length(sampledNdist)
+%                     
+%                 else
+%                     idx1 = bnds(SegIdx,1) - 1 + loc_idx;
+%                 end
+%             end
 
-            if SegIdx == 1
-                if mode == 1 % Halve bnds idxs                    
-                    idx1 = floor(sum(bnds(1,:))/2);                     
-                end
-%                 rem_bnds = obj.params.bnds(2:end,:);
-%                 obj.params.bnds = [bnds(1,1), idx1;
-%                                    idx1, bnds(1,2);
-%                                    rem_bnds];
+            idx1 = floor(sum(bnds(SegIdx,:))/2);
+            if SegIdx == 1                
+                rem_bnds = obj.params.bnds(2:end,:);
+                obj.params.bnds = [bnds(1,1), idx1;
+                                   idx1, bnds(1,2);
+                                   rem_bnds];
 
-                % Modified version of index re-assignment
-                Prev = [bnds(1,1), idx1];
-                Next = [idx1, bnds(1,2);
-                        bnds(2:end,:)];
-                PropNext = obj.BackPropIdxs(Next,'next');
-                obj.params.bnds = vertcat(Prev,PropNext);
+                
+%                 if ~obj.validity(SegIdx+1)
+%                     % Find maximum error idx for next segment
+%                     idxs = find(obj.assoc == SegIdx+1);
+%                     
+%                     % Separate Next Segment if Next segment is also invalid
+%                     sampledNdist = obj.Ndist(idxs);                
+%                     [~,loc_idx] = max(sampledNdist);
+%                     if loc_idx == 1 
+%                         idx2 = bnds(SegIdx,2);
+%                     else
+%                         idx2 = floor((idx1 + bnds(SegIdx+1,2))/2);
+% %                     else
+% %                         idx2 = bnds(SegIdx+1,1) - 1 + loc_idx;
+%                     end
+%                 else
+%                     % Next Segment is valid, do not alter
+%                     idx2 = bnds(SegIdx,2);
+%                 end
+%                 
+%                 % Modified version of index re-assignment
+%                 obj.params.bnds = [bnds(SegIdx,1), idx1;
+%                                    idx1, idx2;
+%                                    idx2, bnds(SegIdx+1,2);
+%                                    bnds(SegIdx+2:end,:)];                
 
                 rem_kappa = obj.params.kappa(2:end);
                 obj.params.kappa = [kappa(SegIdx), kappa(SegIdx), rem_kappa];
                 
+                % Used for ArcBaseFit
+%                 L1 = 1/2 * L(SegIdx);
+%                 L2 = 1/2 * (L1 + L(SegIdx+1));
+%                 obj.params.L = [L1, L2, L2, L(SegIdx+2:end)];
             elseif SegIdx == n                
-                if mode == 1
-                    idx1 = floor(sum(bnds(SegIdx,:))/2);
-                end
                 rem_bnds = obj.params.bnds(1:end-1,:);
                 obj.params.bnds = [rem_bnds;
                                    bnds(end,1), idx1;
                                    idx1, bnds(end,2)];
 
+%                 % Find maximum error idx for previous segment
+%                 idxs = find(obj.assoc == SegIdx-1);
+%                 sampledNdist = obj.Ndist(idxs);
+%                 [~,loc_idx] = max(sampledNdist);
+%                 
+%                 if ~obj.validity(SegIdx-1)
+%                     if loc_idx == length(sampledNdist)
+%                         idx2 = bnds(SegIdx,1);
+%                     else
+%                         % If largest error occurs at 
+%                         idx2 = floor((idx1 + bnds(SegIdx-1,1))/2);
+% %                     else
+% %                         idx2 = bnds(SegIdx-1,1) - 1 + loc_idx;
+%                     end
+%                 else
+%                     idx2 = bnds(SegIdx,1);
+%                 end
+%                 obj.params.bnds = [bnds(1:SegIdx-2,:);
+%                                    bnds(SegIdx-1,1), idx2;
+%                                    idx2, idx1;
+%                                    idx1, bnds(SegIdx,2)];
+                    
+
                 rem_kappa = obj.params.kappa(1:end-1);
                 obj.params.kappa = [rem_kappa, kappa(SegIdx), kappa(SegIdx)];
-
+                
+%                 L1 = 1/2 * L(SegIdx);
+%                 L2 = 1/2 * (L1 + L(SegIdx-1));
+%                 obj.params.L = [L(1:SegIdx-2), L2, L2, L1];                
             else
-                if mode == 1
-                    idx1 = floor(sum(bnds(SegIdx,:))/2);
-                end
                 rem_bndsP = obj.params.bnds(1:SegIdx-1,:);
                 rem_bndsN = obj.params.bnds(SegIdx+1:end,:);
                 obj.params.bnds = [rem_bndsP;
                                    bnds(SegIdx,1), idx1;
                                    idx1, bnds(SegIdx,2);
-                                   rem_bndsN]; 
+                                   rem_bndsN];
+
+%                 % Find maximum error idx for previous segment
+%                 idxsP = find(obj.assoc == SegIdx-1);
+%                 sampledNdistP = obj.Ndist(idxsP);
+%                 [~,loc_idxP] = max(sampledNdistP);
+%                 
+%                 if ~obj.validity(SegIdx-1)
+%                     if loc_idxP == length(sampledNdistP)
+%                         idxP = bnds(SegIdx,1);
+%                     else
+%                         idxP =  floor((idx1 + bnds(SegIdx-1,1))/2);
+% %                     else
+% %                         idxP = bnds(SegIdx-1,1) - 1 + loc_idxP;
+%                     end
+%                 else
+%                     idxP = bnds(SegIdx,1);
+%                 end
+%                 
+%                 % Find maximum error idx for next segment
+%                 idxsN = find(obj.assoc == SegIdx+1);
+%                 sampledNdistN = obj.Ndist(idxsN);
+%                 [~,loc_idxN] = max(sampledNdistN);
+%                 if loc_idxN == 1 
+%                     idxN = bnds(SegIdx,2);
+%                 else                   
+%                     idxN = floor((idx1 + bnds(SegIdx+1,2))/2);
+% %                 else
+% %                     idxN = bnds(SegIdx+1,1) - 1 + loc_idxN;
+%                 end
+% %                 if ~obj.validity(SegIdx+1)
+% %                     
+% %                 else
+% %                     idxN = bnds(SegIdx,2);
+% %                 end
+%                 
+%                 obj.params.bnds = [bnds(1:SegIdx-2,:);
+%                                    bnds(SegIdx-1,1), idxP;
+%                                    idxP, idx1;
+%                                    idx1, idxN;
+%                                    idxN, bnds(SegIdx+1,2);
+%                                    bnds(SegIdx+2:end,:)];
 
                 rem_kappaP = obj.params.kappa(1:SegIdx-1);
                 rem_kappaN = obj.params.kappa(SegIdx+1:end);
                 obj.params.kappa = [rem_kappaP, kappa(SegIdx), kappa(SegIdx), rem_kappaN];
-
+                
+%                 L1 = 1/2 * L(SegIdx);
+%                 LP = 1/2 * (L1 + 1/2 * L(SegIdx-1));
+%                 LN = 1/2 * (L1 + 1/2 * L(SegIdx+1));
+% 
+%                 obj.params.L = [L(1:SegIdx-2), LP, LP, LN, LN, L(SegIdx+2:end)];
             end
+            obj.params.L = obj.getInitArcLength();
         end
         
         %% Compute Arc Length
@@ -508,6 +633,20 @@ classdef ArcFit < handle
 
         end
         
+        %% Compute Initial Arc Length values
+        function L = getInitArcLength(obj)
+            bnds = obj.params.bnds;
+            L = [];
+            for i=1:size(bnds,1)
+                lb = bnds(i,1); ub = bnds(i,2);
+                L_ = 0;
+                for j=lb:ub-1
+                    L_ = L_ + norm(obj.points(:,j+1) - obj.points(:,j));
+                end
+                L = [L, L_];
+            end
+        end
+
     end
 
     methods(Static)
@@ -547,9 +686,5 @@ classdef ArcFit < handle
             end
         end        
         
-        %% BackPropagate Data Indices
-        function Idxs = BackPropIdxs(arr,flag)
-            
-        end
     end
 end

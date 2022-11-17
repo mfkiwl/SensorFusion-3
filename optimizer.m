@@ -122,6 +122,7 @@ classdef optimizer < handle
                 % step automatically
                 % Complete arc fitting is done in this step
                 obj.map = ArcMap(obj.states,obj.lane,obj.lane.prob_thres,obj.opt.LeftCov,obj.opt.RightCov);
+                obj.map.optimize();
             end           
         end
 
@@ -157,61 +158,61 @@ classdef optimizer < handle
                 elseif strcmp(obj.opt.options.Algorithm,'TR')
                     obj.TrustRegion();
                 end
-            else
-                % Lane data is used for optimization
-                % Current model: Continuous Piecewise Arc Spline Lane Model
-                % 
-                % Phase 2 Optimization
-                % 
-                % =================<Optimization step>=================
-                % 1. Perform data association with current optimized
-                % vehicle states and arc parameters
-                %
-                % 2. Fully converge the problem with iterative data
-                % association
-                %
-                % 3. Validate optimization results and add subsegments if
-                % needed. 
-                %
-                % 4. Until all segments are valid, repeat steps 1 ~ 3.
-                % =====================================================
-                %
-                
-                obj.phase = 2;
-                obj.opt.options.Algorithm = 'TR';
-                obj.opt.options.IterThres = inf; % Change if needed
-                obj.opt.options.CostThres = 1;
-                valid = false;
-
-                while ~valid
-                    
-                    obj.updateTracker();                    
-                    obj.opt.x0 = zeros(16*n + obj.opt.seg_tracker(end),1);
-
-                    % Step 2: Full Convergence 
-                    if strcmp(obj.opt.options.Algorithm,'GN')
-                        obj.GaussNewton();
-                    elseif strcmp(obj.opt.options.Algorithm,'LM')
-                        obj.LevenbergMarquardt();
-                    elseif strcmp(obj.opt.options.Algorithm,'TR')
-                        obj.TrustRegion();
-                    end                    
-                    
-                    % Step 3: Validate and perform data association 
-                    % Create new arc segments if needed 
-                    
-                    obj.map.validate();
-                    
-                    % Step 1 is done inside the validation function
-                    valid = obj.map.valid_flag;
-
-                    % Step 4: Repeat 1 ~ 3 until all segments are valid
-                    % Show optimization results after optimization
-                    % 
-                    % Number of Sub-segments for each segments
-                    % Summary for each Sub-segments: Curvature, Arc Length
-                    % Summary for each Segments: Curvature, Arc Length
-                end               
+%             else
+%                 % Lane data is used for optimization
+%                 % Current model: Continuous Piecewise Arc Spline Lane Model
+%                 % 
+%                 % Phase 2 Optimization
+%                 % 
+%                 % =================<Optimization step>=================
+%                 % 1. Perform data association with current optimized
+%                 % vehicle states and arc parameters
+%                 %
+%                 % 2. Fully converge the problem with iterative data
+%                 % association
+%                 %
+%                 % 3. Validate optimization results and add subsegments if
+%                 % needed. 
+%                 %
+%                 % 4. Until all segments are valid, repeat steps 1 ~ 3.
+%                 % =====================================================
+%                 %
+%                 
+%                 obj.phase = 2;
+%                 obj.opt.options.Algorithm = 'TR';
+%                 obj.opt.options.IterThres = inf; % Change if needed
+%                 obj.opt.options.CostThres = 1;
+%                 valid = false;
+% 
+%                 while ~valid
+%                     
+%                     obj.updateTracker();                    
+%                     obj.opt.x0 = zeros(16*n + obj.opt.seg_tracker(end),1);
+% 
+%                     % Step 2: Full Convergence 
+%                     if strcmp(obj.opt.options.Algorithm,'GN')
+%                         obj.GaussNewton();
+%                     elseif strcmp(obj.opt.options.Algorithm,'LM')
+%                         obj.LevenbergMarquardt();
+%                     elseif strcmp(obj.opt.options.Algorithm,'TR')
+%                         obj.TrustRegion();
+%                     end                    
+%                     
+%                     % Step 3: Validate and perform data association 
+%                     % Create new arc segments if needed 
+%                     
+%                     obj.map.validate();
+%                     
+%                     % Step 1 is done inside the validation function
+%                     valid = obj.map.valid_flag;
+% 
+%                     % Step 4: Repeat 1 ~ 3 until all segments are valid
+%                     % Show optimization results after optimization
+%                     % 
+%                     % Number of Sub-segments for each segments
+%                     % Summary for each Sub-segments: Curvature, Arc Length
+%                     % Summary for each Segments: Curvature, Arc Length
+%                 end               
             end
         end
          
@@ -316,57 +317,62 @@ classdef optimizer < handle
             obj.opt.P_lla = P_lla;
             p_est = geoplot(P_lla(:,1),P_lla(:,2),'r.'); 
             
-            if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
-                n = length(obj.map.arc_segments);
-                for i=1:n
-                    m = length(obj.map.arc_segments{i}.kappa);
-                    seg = obj.map.arc_segments{i};
-                    heading = seg.tau0;
-                    SegPoints = [seg.x0;
-                                 seg.y0];
-                    for j=1:m
-                        kappa = seg.kappa(j); L = seg.L(j);
-                        headingPrev = heading;
-                        heading = heading + kappa * L;
-                        headingCurr = heading;
-    
-                        heading_ = linspace(headingPrev,headingCurr,1e3);
-                        addedSegPoints = SegPoints(:,end) + 1/kappa * [sin(heading_) - sin(headingPrev);
-                                                                       -cos(heading_) + cos(headingPrev)];
-                        SegPoints = [SegPoints addedSegPoints];
-                        
-                        lla_node1 = enu2lla([addedSegPoints(1,1),addedSegPoints(2,1),0],obj.gnss.lla0,'ellipsoid');
-                        lla_node2 = enu2lla([addedSegPoints(1,end),addedSegPoints(2,end),0],obj.gnss.lla0,'ellipsoid');
-                        p_node = geoplot(lla_node1(1),lla_node1(2),'co');
-                        geoplot(lla_node2(1),lla_node2(2),'co');
-                    end
-                    
-                    lla_seg = enu2lla([SegPoints' zeros(size(SegPoints,2),1)],obj.gnss.lla0,'ellipsoid');
-                    lla_node3 = enu2lla([SegPoints(1,1),SegPoints(2,1),0],obj.gnss.lla0,'ellipsoid');
-                    lla_node4 = enu2lla([SegPoints(1,end),SegPoints(2,end),0],obj.gnss.lla0,'ellipsoid');
-    
-                    p_lane = geoplot(lla_seg(:,1),lla_seg(:,2),'k-');
-                    p_seg = geoplot(lla_node3(1),lla_node3(2),'ms');
-                    geoplot(lla_node4(1),lla_node4(2),'ms');
-                    
-                    
-                end
-                geobasemap satellite
+%             if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
+%                 n = length(obj.map.arc_segments);
+%                 for i=1:n
+%                     m = length(obj.map.arc_segments{i}.kappa);
+%                     seg = obj.map.arc_segments{i};
+%                     heading = seg.tau0;
+%                     SegPoints = [seg.x0;
+%                                  seg.y0];
+%                     for j=1:m
+%                         kappa = seg.kappa(j); L = seg.L(j);
+%                         headingPrev = heading;
+%                         heading = heading + kappa * L;
+%                         headingCurr = heading;
+%     
+%                         heading_ = linspace(headingPrev,headingCurr,1e3);
+%                         addedSegPoints = SegPoints(:,end) + 1/kappa * [sin(heading_) - sin(headingPrev);
+%                                                                        -cos(heading_) + cos(headingPrev)];
+%                         SegPoints = [SegPoints addedSegPoints];
+%                         
+%                         lla_node1 = enu2lla([addedSegPoints(1,1),addedSegPoints(2,1),0],obj.gnss.lla0,'ellipsoid');
+%                         lla_node2 = enu2lla([addedSegPoints(1,end),addedSegPoints(2,end),0],obj.gnss.lla0,'ellipsoid');
+%                         p_node = geoplot(lla_node1(1),lla_node1(2),'co');
+%                         geoplot(lla_node2(1),lla_node2(2),'co');
+%                     end
+%                     
+%                     lla_seg = enu2lla([SegPoints' zeros(size(SegPoints,2),1)],obj.gnss.lla0,'ellipsoid');
+%                     lla_node3 = enu2lla([SegPoints(1,1),SegPoints(2,1),0],obj.gnss.lla0,'ellipsoid');
+%                     lla_node4 = enu2lla([SegPoints(1,end),SegPoints(2,end),0],obj.gnss.lla0,'ellipsoid');
+%     
+%                     p_lane = geoplot(lla_seg(:,1),lla_seg(:,2),'k-');
+%                     p_seg = geoplot(lla_node3(1),lla_node3(2),'ms');
+%                     geoplot(lla_node4(1),lla_node4(2),'ms');
+%                     
+%                     
+%                 end
+%                 geobasemap satellite
+% 
+%                 title('Optimized Trajectory Comparison')
+%                 legend([p_est,p_gnss,p_lane,p_seg,p_node],...
+%                        'Optimized Vehicle Trajectory','GNSS Measurements',...
+%                        'Continuous Piecewise Arc Spline',...
+%                        'Arc Segment Node','Arc Sub-Segment Node')
+% %                 title('Scenario Trajectory')
+% %                 legend([p_gnss],'GNSS Measurements')
+%             else
+%                 geobasemap satellite
+% 
+%                 title('Optimized Trajectory Comparison')
+%                 legend([p_est,p_gnss],...
+%                        'Optimized Vehicle Trajectory','GNSS Measurements')
+%             end
+            geobasemap satellite
 
-                title('Optimized Trajectory Comparison')
-                legend([p_est,p_gnss,p_lane,p_seg,p_node],...
-                       'Optimized Vehicle Trajectory','GNSS Measurements',...
-                       'Continuous Piecewise Arc Spline',...
-                       'Arc Segment Node','Arc Sub-Segment Node')
-%                 title('Scenario Trajectory')
-%                 legend([p_gnss],'GNSS Measurements')
-            else
-                geobasemap satellite
-
-                title('Optimized Trajectory Comparison')
-                legend([p_est,p_gnss],...
-                       'Optimized Vehicle Trajectory','GNSS Measurements')
-            end
+            title('Optimized Trajectory Comparison')
+            legend([p_est,p_gnss],...
+                   'Optimized Vehicle Trajectory','GNSS Measurements')
 
 %             geoplot(obj.snap.lat,obj.snap.lon,'c.','MarkerSize',8)
 
@@ -428,7 +434,7 @@ classdef optimizer < handle
         %% Visualize with HD Map
         function visualizeHD(obj,Lane)
             figure(20); hold on; grid on; axis equal;
-            p_l = mapshow(Lane);             
+            p_l = mapshow(Lane,'Color','blue','LineStyle','--','Marker','.','MarkerEdgeColor','red');             
 
             % Convert vehicle states to UTM-K coords            
             
@@ -443,7 +449,8 @@ classdef optimizer < handle
 
             xlabel('UTM-K X (m)');ylabel('UTM-K Y (m)');
             title('HD Map')
-            legend([p_l, p_v],'HD Map Lanes','Vehicle Trajectory')
+%             legend([p_l, p_v],'HD Map Lanes','Vehicle Trajectory')
+            legend(p_l,'HD Map Link(Blue)/Node(Red)')
         end        
         
         %% Plot lane point std values

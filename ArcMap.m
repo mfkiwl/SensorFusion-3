@@ -163,6 +163,26 @@ classdef ArcMap < handle
            
             
         end
+        
+        %% Optimize Parameters
+        function obj = optimize(obj)
+
+            for i=1:length(obj.arc_segments)
+                initFit = ArcFit(obj.arc_segments{i}, ...
+                                 obj.segments{i}, ...                                            
+                                 obj.covs{i},i);                 
+                obj.arc_segments{i} = initFit;
+                obj.arc_segments{i}.optimize();
+            end
+%             obj.arcFit{1}.CreateTestArcFitBase();
+        end
+
+        %% Dummy func 3 for test
+        function obj = dummy3(obj)
+%            obj.arcFit{1}.optimize();
+            obj.arcFit{1}.RunTestArcFitBase();
+        end
+
 
         %% Map Update for 
         function obj = update(obj,states,arc_delta_params)
@@ -279,7 +299,7 @@ classdef ArcMap < handle
             obj.summary();
 
 
-            figure(1); hold on; grid on; axis equal;
+            figure(50); hold on; grid on; axis equal;
             
             n = length(obj.states);
             
@@ -289,9 +309,10 @@ classdef ArcMap < handle
             end
 
             n = length(obj.arc_segments);
+            % 1:n
             for i=1:n
-                m = length(obj.arc_segments{i}.kappa);
-                seg = obj.arc_segments{i};
+                m = length(obj.arc_segments{i}.params.kappa);
+                seg = obj.arc_segments{i}.params;
                 heading = seg.tau0;
                 SegPoints = [seg.x0;
                              seg.y0];
@@ -330,7 +351,7 @@ classdef ArcMap < handle
             
             numSubSeg = 0;
             for i=1:length(obj.arc_segments)
-                seg = obj.arc_segments{i};
+                seg = obj.arc_segments{i}.params;
                 numSubSeg = numSubSeg + length(seg.L);
                 fprintf('\n')
                 disp(['Segment No. ',num2str(i),': ',num2str(length(seg.L)),' Subsegments'])
@@ -605,7 +626,7 @@ classdef ArcMap < handle
             % save data. Since covariance or weight data of lane points are
             % not available, use rmse error for determining the 'goodness'
             % of circular fitting.
-            rmse_thres = 0.3;
+            rmse_thres = 0.2;
             lb = 1; n = numel(intvL); cnt = 1;
             
             initSegments = {};
@@ -636,7 +657,9 @@ classdef ArcMap < handle
                 % Current sensor fusion model merge lanes almost perfectly,
                 % so setting err_thres to about 1m will be fine.
                 
-                err_thres = 1; 
+                err_thres = 1.5; 
+                iter_cnt = 1;
+                iter_lim = n - lb + 1;
                 while max_fit_err < err_thres
                     % Upper bound is found randomly between (lb+1,n) so that
                     % maximum circular fitting error is between values 3 and 5
@@ -650,6 +673,12 @@ classdef ArcMap < handle
                                          ones(1,intvL(ub)-intvL(lb)+1)],...
                                         0.99,false);
                     max_fit_err = err.emax;
+                    iter_cnt = iter_cnt + 1;
+                    % If Looped too many times, exit with ub such that
+                    % error is larger than 0.5
+                    if iter_cnt >= iter_lim
+                        err_thres = 0.5; % Check if this is valid
+                    end
                 end
     
                 rmse = inf;
