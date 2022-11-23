@@ -13,7 +13,7 @@ clear; close all; clc;
 % Scenario 6: 2022-08-05--04-19-33 : Challenging Scenario 2 (굳이?)
 
 base_path = 'D:\SJ_Dataset\2022-08-05\';
-scenario = '2022-08-05--02-41-03';
+scenario = '2022-08-05--02-57-24';
 
 imu = load(strcat(base_path,scenario,'\results\imu.mat'));
 gnss = load(strcat(base_path,scenario,'\results\gnss.mat'));
@@ -26,8 +26,8 @@ can = load(strcat(base_path,scenario,'\results\can.mat'));
 % can = load('can.mat');
 % snap = load('snap_raw.mat');
 
-% figure(25);
-% geoplot(gnss.pos(:,1),gnss.pos(:,2),'r.')
+figure(25);
+geoplot(gnss.pos(:,1),gnss.pos(:,2),'r.')
 
 %% Pre Process raw data
 dataset = dataprocessor(imu,gnss,can,lane);
@@ -145,7 +145,7 @@ sol.full.optimize();
 % sol.full.map.validate();
 
 
-
+sol.full.plotConfEllipse(0.9);
 
 %%
 sol.full.visualize();
@@ -166,11 +166,22 @@ saved_map = sol.full.map; %% Save data
 % D:\SJ_Dataset\HDMap\Map2\SEC02_세종정부청사_주변\HDMap_UTMK_타원체고\B2_SURFACELINEMARK.shp
 
 T1 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\B2_SURFACELINEMARK.shp");
-sol.full.visualizeHD(T1);
-T2 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A1_NODE.dbf");
-T3 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A2_LINK.dbf");
-% T2 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A1_NODE.shp");
-% mapshow(T2,'Color','red','LineStyle','none','Marker','+');
-% T3 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A2_LINK.shp");
-% % mapshow(T3,'Color','green','LineStyle','--','Marker','o','MarkerEdgeColor','blue');
-% mapshow(T3,'Color','green','LineStyle','--');
+T2 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC02_세종정부청사_주변\HDMap_UTMK_타원체고\B2_SURFACELINEMARK.shp");
+% mapshow(T1); hold on;
+% mapshow(T2);
+sol.full.visualizeHD(T1,T2);
+% T2 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A1_NODE.dbf");
+% T3 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A2_LINK.dbf");
+
+% for i=1:9
+%     string = num2str(i);
+%     front = "D:\SJ_Dataset\HDMap\Map3\";
+%     back = "\HDMap_UTMK_타원체고\B2_SURFACELINEMARK.shp";
+%     T1 = readgeotable(strcat(front,string,back));
+%     mapshow(T1); hold on; grid on; axis equal;
+% end
+% back2 = "\HDMap_UTMK_타원체고\A1_NODE.shp";
+% T2 = readgeotable(strcat(front,string,back));
+
+% T1 = readgeotable("D:\NaverLabsDataset\pangyo\road_layout\1.0.0\pangyo_A3_LINK_3D.shp");
+% mapshow(T1)

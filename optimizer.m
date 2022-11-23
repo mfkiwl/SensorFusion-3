@@ -274,40 +274,42 @@ classdef optimizer < handle
             gnss_pos = lla2enu(obj.gnss.pos,obj.gnss.lla0,'ellipsoid');
             
 
-            figure(1); hold on; grid on; axis equal;
-%             p_est = plot3(P(1,:),P(2,:),P(3,:),'r.');
-%             p_gnss = plot3(gnss_pos(:,1),gnss_pos(:,2),gnss_pos(:,3),'b.');
+%             figure(1); hold on; grid on; axis equal;
+% %             p_est = plot3(P(1,:),P(2,:),P(3,:),'r.');
+% %             p_gnss = plot3(gnss_pos(:,1),gnss_pos(:,2),gnss_pos(:,3),'b.');
+% %             
+% %             for i=1:n
+% %                 left_ = left{i}; right_ = right{i};
+% %                 plot3(left_(1,:),left_(2,:),left_(3,:));
+% %                 plot3(right_(1,:),right_(2,:),right_(3,:));
+% %             end
+%             p_est = plot(P(1,:),P(2,:),'r.');
+%             p_gnss = plot(gnss_pos(:,1),gnss_pos(:,2),'b.');
 %             
 %             for i=1:n
 %                 left_ = left{i}; right_ = right{i};
-%                 plot3(left_(1,:),left_(2,:),left_(3,:));
-%                 plot3(right_(1,:),right_(2,:),right_(3,:));
+%                 plot(left_(1,1),left_(2,1),'c.');
+%                 plot(right_(1,1),right_(2,1),'m.');
 %             end
-            p_est = plot(P(1,:),P(2,:),'r.');
-            p_gnss = plot(gnss_pos(:,1),gnss_pos(:,2),'b.');
-            
-            for i=1:n
-                left_ = left{i}; right_ = right{i};
-                plot(left_(1,1),left_(2,1),'cx');
-                plot(right_(1,1),right_(2,1),'mx');
-            end
-
-            for i=1:size(obj.lane.FactorValidIntvs,1)-1
-                ub = obj.lane.FactorValidIntvs(i,2);
-                plot(obj.states{ub}.P(1),obj.states{ub}.P(2),'g+');
-            end
-
-%             if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
-%                 for i=1:n
-%                     left_ = left{i}; right_ = right{i};
-%                     plot(left_(1,:),left_(2,:));
-%                     plot(right_(1,:),right_(2,:));
-%                 end
+% 
+%             for i=1:size(obj.lane.FactorValidIntvs,1)-1
+%                 lb = obj.lane.FactorValidIntvs(i,1);
+%                 ub = obj.lane.FactorValidIntvs(i,2);
+%                 plot(obj.states{lb}.P(1),obj.states{lb}.P(2),'gs')
+%                 plot(obj.states{ub}.P(1),obj.states{ub}.P(2),'gs');
 %             end
-
-            xlabel('Global X'); ylabel('Global Y');
-            title('Optimized Trajectory 3D Comparison')
-            legend([p_est,p_gnss],'Estimated Trajectory','GNSS Measurements')
+% 
+% %             if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
+% %                 for i=1:n
+% %                     left_ = left{i}; right_ = right{i};
+% %                     plot(left_(1,:),left_(2,:));
+% %                     plot(right_(1,:),right_(2,:));
+% %                 end
+% %             end
+% 
+%             xlabel('Global X'); ylabel('Global Y');
+%             title('Optimized Trajectory 3D Comparison')
+%             legend([p_est,p_gnss],'Estimated Trajectory','GNSS Measurements')
             
             figure(2); 
 %             snap_lla = [obj.snap.lat, obj.snap.lon, zeros(size(obj.snap.lat,1),1)];                       
@@ -432,10 +434,10 @@ classdef optimizer < handle
         end
         
         %% Visualize with HD Map
-        function visualizeHD(obj,Lane)
+        function visualizeHD(obj,Lane1,Lane2)
             figure(20); hold on; grid on; axis equal;
-            p_l = mapshow(Lane,'Color','blue','LineStyle','--','Marker','.','MarkerEdgeColor','red');             
-
+            p_l1 = mapshow(Lane1,'Color','blue','LineStyle','--','Marker','.','MarkerEdgeColor','red');             
+            p_l2 = mapshow(Lane2,'Color','blue','LineStyle','--','Marker','.','MarkerEdgeColor','red');
             % Convert vehicle states to UTM-K coords            
             
             ENU = [];
@@ -450,14 +452,145 @@ classdef optimizer < handle
             xlabel('UTM-K X (m)');ylabel('UTM-K Y (m)');
             title('HD Map')
 %             legend([p_l, p_v],'HD Map Lanes','Vehicle Trajectory')
-            legend(p_l,'HD Map Link(Blue)/Node(Red)')
+            legend(p_l1,'HD Map Link(Blue)/Node(Red)')
         end        
         
+        %% Visualize with Reference and Comparison
+        function visualizeRef(obj,varargin)
+
+            ref = varargin{1};
+            if length(varargin) == 5
+                vins_stereo_imu = varargin{2};
+                vins_stereo = varargin{3};
+                vins_mono_imu = varargin{4};
+                dso = varargin{5};
+            elseif length(varargin) == 4
+                vins_stereo_imu = varargin{2};
+                vins_stereo = varargin{3};
+                vins_mono_imu = varargin{4};
+                dso = [];
+            else
+                error('Invalid input size')
+            end
+
+            % Number of position data should be equal to number of states
+            obj.opt.ENU_ref = lla2enu(ref.pos,obj.gnss.lla0,'ellipsoid');
+            n = length(obj.states);
+            if size(obj.opt.ENU_ref,1) ~= n
+                error('Data size should be matched!')
+            end
+
+            obj.opt.E = zeros(1,n);
+            for i=1:n
+                P = obj.states{i}.P;
+                obj.opt.E(i) = norm(obj.opt.ENU_ref(i,1:2)' - P(1:2));
+            end
+            obj.opt.SE =obj.opt.E.^2;
+            obj.opt.MSE = mean(obj.opt.SE);
+            obj.opt.RMSE = sqrt(obj.opt.MSE);
+            
+            disp('=========Optimization Summary with Reference data=========')
+            if strcmp(obj.mode,'basic')
+                disp('vSensor Fusion Mode (INS + GNSS)----')
+            elseif strcmp(obj.mode,'partial')
+                disp('----Sensor Fusion Mode (INS + GNSS + WSS)----')
+            end
+            
+            disp(['RMSE: ',num2str(obj.opt.RMSE,3),'m'])
+            disp(['Max Error: ',num2str(max(obj.opt.E),3),'m'])
+            
+
+            P = [];
+
+            for i=1:n
+                P_ = obj.states{i}.P;
+                P = [P P_];                
+            end
+            figure(30);
+            p_gnss = geoplot(obj.gnss.pos(:,1),obj.gnss.pos(:,2),'b.'); grid on; hold on;
+            P_lla = enu2lla(P',obj.gnss.lla0,'ellipsoid');                        
+            obj.opt.P_lla = P_lla;
+            p_est = geoplot(P_lla(:,1),P_lla(:,2),'r.'); 
+            p_ref = geoplot(ref.pos(:,1),ref.pos(:,2),'k.');
+            geobasemap satellite
+
+            title('Optimized Trajectory Comparison')
+            legend([p_est,p_gnss,p_ref],...
+                   'Optimized Vehicle Trajectory','GNSS Measurements','Ground Truth')
+            
+            
+            % Plot on ENU frame
+            figure(31); grid on; hold on; axis equal;
+            p_ref = plot(obj.opt.ENU_ref(:,1),obj.opt.ENU_ref(:,2),'k-.','Marker','o','MarkerSize',2);
+            p_est = plot(P(1,:),P(2,:),'r--');
+            p_vins_st_imu = plot(vins_stereo_imu.x,vins_stereo_imu.y,'m--');
+            p_vins_st = plot(vins_stereo.x,vins_stereo.y,'c--');
+            p_vins_mono = plot(vins_mono_imu.x,vins_mono_imu.y,'g--');
+            
+            xlabel('Global X(m)'); ylabel('Global Y(m)');
+            title('Vehicle Trajectory Reconstruction');
+            if ~isempty(dso)
+                p_dso = plot(dso.x,dso.y,'b--');
+                legend([p_ref,p_est,p_vins_st_imu,p_vins_st,p_vins_mono,p_dso], ...
+                        'Reference Trajectory', ...
+                        'Proposed Sensor Fusion', ...
+                        'VINS Stereo + IMU', ...
+                        'VINS Stereo','VINS Mono + IMU','DSO')
+            else
+                legend([p_ref,p_est,p_vins_st_imu,p_vins_st,p_vins_mono], ...
+                        'Reference Trajectory', ...
+                        'Proposed Sensor Fusion', ...
+                        'VINS Stereo + IMU', ...
+                        'VINS Stereo','VINS Mono + IMU')
+            end
+            
+            
+            % Error Analysis for other algorithms
+            obj.opt.comparison_error = struct();
+            % VINS Stereo IMU    
+            obj.opt.comparison_error.vins_stimu = obj.computeError(obj.opt.ENU_ref(:,1:2)',[vins_stereo_imu.x'; vins_stereo_imu.y']);
+            SE = obj.opt.comparison_error.vins_stimu.^2;
+            MSE = mean(SE); RMSE = sqrt(MSE);
+            disp('----VINS Stereo + IMU----')
+            disp(['RMSE: ',num2str(RMSE,3),'m'])
+            disp(['Max Error: ',num2str(max(obj.opt.comparison_error.vins_stimu),3),'m'])
+
+            % VINS Stereo 
+            obj.opt.comparison_error.vins_st = obj.computeError(obj.opt.ENU_ref(:,1:2)',[vins_stereo.x'; vins_stereo.y']);
+            SE = obj.opt.comparison_error.vins_st.^2;
+            MSE = mean(SE); RMSE = sqrt(MSE);
+            disp('----VINS Stereo----')
+            disp(['RMSE: ',num2str(RMSE,3),'m'])
+            disp(['Max Error: ',num2str(max(obj.opt.comparison_error.vins_st),3),'m'])
+            
+            % VINS Mono
+            obj.opt.comparison_error.vins_mnimu = obj.computeError(obj.opt.ENU_ref(:,1:2)',[vins_mono_imu.x'; vins_mono_imu.y']);
+            SE = obj.opt.comparison_error.vins_mnimu.^2;
+            MSE = mean(SE); RMSE = sqrt(MSE);
+            disp('----VINS Mono + IMU----')
+            disp(['RMSE: ',num2str(RMSE,3),'m'])
+            disp(['Max Error: ',num2str(max(obj.opt.comparison_error.vins_mnimu),3),'m'])
+
+            % DSO (If existing)
+            if ~isempty(dso)
+                obj.opt.comparison_error.dso = obj.computeError(obj.opt.ENU_ref(:,1:2)',[dso.x'; dso.y']);
+                SE = obj.opt.comparison_error.dso.^2;
+                MSE = mean(SE); RMSE = sqrt(MSE);
+                disp('----DSO----')
+                disp(['RMSE: ',num2str(RMSE,3),'m'])
+                disp(['Max Error: ',num2str(max(obj.opt.comparison_error.dso),3),'m'])
+            else
+                disp('----DSO----')
+                disp('Algorithm Failed')
+            end
+
+        end
+
         %% Plot lane point std values
         function plotConfEllipse(obj,p)
             % 0 < p < 1 : Confidence Level
             % Left Lane
-            figure(1); grid on; axis equal; hold on;
+            figure(200); grid on; axis equal; hold on;
             % i=1:length(obj.states)
             for i=700:1000
                 R = obj.states{i}.R;
@@ -1021,12 +1154,13 @@ classdef optimizer < handle
                 end
             end
 
-
-            % Sparse Inverse to extract lane covariance
-            obj.opt.info = jac' * jac;
-            disp('[Computing Sparse Inverse of Information Matrix...]')
-            obj.opt.cov = sparseinv(obj.opt.info);
-            obj.extractLaneCov();
+            if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
+                % Sparse Inverse to extract lane covariance
+                obj.opt.info = jac' * jac;
+                disp('[Computing Sparse Inverse of Information Matrix...]')
+                obj.opt.cov = sparseinv(obj.opt.info);
+                obj.extractLaneCov();
+            end
         end
 
         %% Optimization Cost Function
@@ -2237,6 +2371,20 @@ classdef optimizer < handle
         
             pc(1,:) = a(1,:) + mu(1);
             pc(2,:) = a(2,:) + mu(2);             
+        end
+        
+        %% Compute Error with different data length
+        function E = computeError(p_ref,p_est)
+            org_dlen = size(p_ref,2);
+            dlen = size(p_est,2);
+            E = zeros(1,dlen);
+
+            ratio = (org_dlen - 1)/(dlen - 1);
+            for i=1:dlen
+                P_ref = p_ref(:,1+round((i-1)*ratio));
+                P_est = p_est(:,i);
+                E(i) = norm(P_ref - P_est);
+            end
         end
 
     end

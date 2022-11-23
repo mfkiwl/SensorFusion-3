@@ -530,12 +530,16 @@ classdef dataprocessor < handle
 
             
             % Scenario 2
-            laneFactorValidIntvs(4,:) = [laneFactorValidIntvs(4,1), laneFactorValidIntvs(5,2), ...
-                                         laneFactorValidIntvs(5,2) - laneFactorValidIntvs(4,1)+1];
-            laneFactorValidIntvs(5,:) = [];
-            laneFactorValidIntvs(end,1) = laneFactorValidIntvs(end,1) + 15;
-            obj.proc_data.lane.FactorValidIntvs = laneFactorValidIntvs;
-            obj.proc_data.lane.LC_dirs(4) = [];
+%             laneFactorValidIntvs(4,:) = [laneFactorValidIntvs(4,1), laneFactorValidIntvs(5,2), ...
+%                                          laneFactorValidIntvs(5,2) - laneFactorValidIntvs(4,1)+1];
+%             laneFactorValidIntvs(5,:) = [];
+%             laneFactorValidIntvs(end,1) = laneFactorValidIntvs(end,1) + 15;
+%             obj.proc_data.lane.FactorValidIntvs = laneFactorValidIntvs;
+%             obj.proc_data.lane.LC_dirs(4) = [];
+
+            % Scenario 3
+            % remove 1st right turn
+            % 
 
         end
         
