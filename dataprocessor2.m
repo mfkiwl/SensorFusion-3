@@ -14,7 +14,7 @@ output.ubloxgps.t(79:end) = output.ubloxgps.t(79:end) + delta;
 
 
 %% Data Processing with DaeJeon Dataset
-sc = 2;
+sc = 1;
 if sc == 1
     DSTART = 14800; DEND = 16000;
 elseif sc == 2
@@ -60,8 +60,8 @@ for i=1:length(validIdxs)
 
         gnss_.state_idxs = [gnss_.state_idxs, length(state_t)];
         gnss_.pos = [gnss_.pos; gnss_raw.lat(validIdxs(i)), gnss_raw.lon(validIdxs(i)), gnss_raw.lat(validIdxs(i))];
-        gnss_.hAcc = [gnss_.hAcc, gnss_raw.cov(1,validIdxs(i))];
-        gnss_.vAcc = [gnss_.vAcc, gnss_raw.cov(9,validIdxs(i))];
+        gnss_.hAcc = [gnss_.hAcc, 9 * gnss_raw.cov(1,validIdxs(i))];
+        gnss_.vAcc = [gnss_.vAcc, 9 * gnss_raw.cov(9,validIdxs(i))];
         break;
     end
 
@@ -71,8 +71,8 @@ for i=1:length(validIdxs)
         state_t = [state_t, gnss_raw.t(validIdxs(i)):0.1:gnss_raw.t(validIdxs(i+1))];
         gnss_.t = [gnss_.t, gnss_raw.t(validIdxs(i))];
         gnss_.pos = [gnss_.pos; gnss_raw.lat(validIdxs(i)), gnss_raw.lon(validIdxs(i)), gnss_raw.lat(validIdxs(i))];
-        gnss_.hAcc = [gnss_.hAcc, gnss_raw.cov(1,validIdxs(i))];
-        gnss_.vAcc = [gnss_.vAcc, gnss_raw.cov(9,validIdxs(i))];
+        gnss_.hAcc = [gnss_.hAcc, 9 * gnss_raw.cov(1,validIdxs(i))];
+        gnss_.vAcc = [gnss_.vAcc, 9 * gnss_raw.cov(9,validIdxs(i))];
 
         [~,yawIdx] = min(abs(output.ubloxori.t - gnss_raw.t(validIdxs(i))));
         yaw = [yaw, output.ubloxori.rz(yawIdx)];
@@ -86,8 +86,8 @@ for i=1:length(validIdxs)
         gnss_.t = [gnss_.t, gnss_raw.t(validIdxs(i))];
         gnss_.state_idxs = [gnss_.state_idxs, length(state_t)];
         gnss_.pos = [gnss_.pos; gnss_raw.lat(validIdxs(i)), gnss_raw.lon(validIdxs(i)), gnss_raw.lat(validIdxs(i))];
-        gnss_.hAcc = [gnss_.hAcc, gnss_raw.cov(1,validIdxs(i))];
-        gnss_.vAcc = [gnss_.vAcc, gnss_raw.cov(9,validIdxs(i))];
+        gnss_.hAcc = [gnss_.hAcc, 9 * gnss_raw.cov(1,validIdxs(i))];
+        gnss_.vAcc = [gnss_.vAcc, 9 * gnss_raw.cov(9,validIdxs(i))];
 
         [~,yawIdx] = min(abs(output.ubloxori.t - gnss_raw.t(validIdxs(i))));
         yaw = [yaw, output.ubloxori.rz(yawIdx)];
@@ -179,10 +179,8 @@ lane_.lz = zeros(size(lane_.l_inter,1),11);
 lane_.ry = lane_.r_inter;
 lane_.rz = zeros(size(lane_.r_inter,1),11);
 
-
-
-
-snap = 0;
+snap = ref.pos(1,:);
+% snap = [];
 t_ = state_t - base_t;
 
 %% Optimizer Options 
@@ -193,10 +191,10 @@ covs_ = struct();
 covs_.prior = struct();
 covs_.prior.R = diag([0.1^2, 0.1^2, 0.1^2]);
 covs_.prior.V = diag([2^2, 2^2, 2^2]);
-covs_.prior.P = diag([1e-4, 1e-4, 1e-4]);
+covs_.prior.P = diag([1e-5, 1e-5, 1e-5]);
 covs_.prior.Bg = diag([1e-3, 1e-3, 1e-3]);
 covs_.prior.Ba = diag([0.3^2, 0.3^2, 0.3^2]);
-covs_.prior.WSF = 1e-2;
+covs_.prior.WSF = 1e-3;
 % covs_.prior.Params = diag([1e-4,1e-6,1e-4]);
 covs_.prior.Params = 1e-5;
 
@@ -206,11 +204,11 @@ covs_.imu.GyroscopeBiasNoise = 5e-9 * eye(3);
 covs_.imu.GyroscopeNoise = 1e-5 * eye(3);
 covs_.imu.AccelerometerBiasNoise = 5e-7* eye(3);
 covs_.imu.AccelerometerNoise = 5/3 * 1e-3 * eye(3);
-covs_.imu.ScaleFactorNoise = 1e-5;
+covs_.imu.ScaleFactorNoise = 1e-4;
 
 % WSS 
 % covs_.wss = diag([1e-2,1e-5,1e-5]);
-covs_.wss = 1e-4 * eye(3);
+covs_.wss = 1e-5 * eye(3);
 
 % Optimization Options
 options = struct();
@@ -249,7 +247,7 @@ lane_.minL = 5; % Minimum arc length (to prevent singularity)
 
 %% INS + GNSS + WSS Fusion
 sol = struct();
-sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'basic',options);
+sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
 sol.partial.optimize();
 %%
 sol.partial.visualize();
