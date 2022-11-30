@@ -20,8 +20,8 @@ Implemented by JinHwan Jeon, 2022
 # 'D:/SJ_Dataset/2022-08-05/2022-08-05--03-13-16/'
 # 'D:/SJ_Dataset/2022-08-05/2022-08-05--03-45-16/'
 # 'D:/SJ_Dataset/2022-08-05/2022-08-05--04-19-33/'
-file_path = 'D:/SJ_Dataset/2022-08-05/2022-08-05--04-19-33/'
-save_path = 'D:/SJ_Dataset/2022-08-05/2022-08-05--04-19-33/results/'
+file_path = 'D:/SJ_Dataset/2022-08-05/2022-08-05--02-41-03/'
+save_path = 'D:/SJ_Dataset/2022-08-05/2022-08-05--02-41-03/results/'
 
 # path = ''
 dataset = DataLoader(file_path,save_path)

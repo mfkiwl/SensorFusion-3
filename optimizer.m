@@ -274,42 +274,42 @@ classdef optimizer < handle
             gnss_pos = lla2enu(obj.gnss.pos,obj.gnss.lla0,'ellipsoid');
             
 
-%             figure(1); hold on; grid on; axis equal;
-% %             p_est = plot3(P(1,:),P(2,:),P(3,:),'r.');
-% %             p_gnss = plot3(gnss_pos(:,1),gnss_pos(:,2),gnss_pos(:,3),'b.');
-% %             
-% %             for i=1:n
-% %                 left_ = left{i}; right_ = right{i};
-% %                 plot3(left_(1,:),left_(2,:),left_(3,:));
-% %                 plot3(right_(1,:),right_(2,:),right_(3,:));
-% %             end
-%             p_est = plot(P(1,:),P(2,:),'r.');
-%             p_gnss = plot(gnss_pos(:,1),gnss_pos(:,2),'b.');
+            figure(1); hold on; grid on; axis equal;
+%             p_est = plot3(P(1,:),P(2,:),P(3,:),'r.');
+%             p_gnss = plot3(gnss_pos(:,1),gnss_pos(:,2),gnss_pos(:,3),'b.');
 %             
 %             for i=1:n
 %                 left_ = left{i}; right_ = right{i};
-%                 plot(left_(1,1),left_(2,1),'c.');
-%                 plot(right_(1,1),right_(2,1),'m.');
+%                 plot3(left_(1,:),left_(2,:),left_(3,:));
+%                 plot3(right_(1,:),right_(2,:),right_(3,:));
 %             end
-% 
-%             for i=1:size(obj.lane.FactorValidIntvs,1)-1
-%                 lb = obj.lane.FactorValidIntvs(i,1);
-%                 ub = obj.lane.FactorValidIntvs(i,2);
-%                 plot(obj.states{lb}.P(1),obj.states{lb}.P(2),'gs')
-%                 plot(obj.states{ub}.P(1),obj.states{ub}.P(2),'gs');
+            p_est = plot(P(1,:),P(2,:),'r.');
+            p_gnss = plot(gnss_pos(:,1),gnss_pos(:,2),'b.');
+            
+            for i=1:n
+                left_ = left{i}; right_ = right{i};
+                plot(left_(1,1),left_(2,1),'c.');
+                plot(right_(1,1),right_(2,1),'m.');
+            end
+
+            for i=1:size(obj.lane.FactorValidIntvs,1)
+                lb = obj.lane.FactorValidIntvs(i,1);
+                ub = obj.lane.FactorValidIntvs(i,2);
+                plot(obj.states{lb}.P(1),obj.states{lb}.P(2),'gs')
+                plot(obj.states{ub}.P(1),obj.states{ub}.P(2),'gs');
+            end
+
+%             if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
+%                 for i=1:n
+%                     left_ = left{i}; right_ = right{i};
+%                     plot(left_(1,:),left_(2,:));
+%                     plot(right_(1,:),right_(2,:));
+%                 end
 %             end
-% 
-% %             if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
-% %                 for i=1:n
-% %                     left_ = left{i}; right_ = right{i};
-% %                     plot(left_(1,:),left_(2,:));
-% %                     plot(right_(1,:),right_(2,:));
-% %                 end
-% %             end
-% 
-%             xlabel('Global X'); ylabel('Global Y');
-%             title('Optimized Trajectory 3D Comparison')
-%             legend([p_est,p_gnss],'Estimated Trajectory','GNSS Measurements')
+
+            xlabel('Global X'); ylabel('Global Y');
+            title('Optimized Trajectory 3D Comparison')
+            legend([p_est,p_gnss],'Estimated Trajectory','GNSS Measurements')
             
             figure(2); 
 %             snap_lla = [obj.snap.lat, obj.snap.lon, zeros(size(obj.snap.lat,1),1)];                       
@@ -434,9 +434,17 @@ classdef optimizer < handle
         end
         
         %% Visualize with HD Map
-        function visualizeHD(obj,Lane1,Lane2)
+        function visualizeHD(obj,varargin)
             figure(20); hold on; grid on; axis equal;
-            p_l1 = mapshow(Lane1,'Color','blue','LineStyle','--','Marker','.','MarkerEdgeColor','red');             
+            Lane1 = varargin{1}; % shp file 1
+            Lane2 = varargin{2}; % shp file 2
+            
+%             roadspec = makesymbolspec('Line',...
+%                                        {'Default','Color','blue','LineStyle','--','LineWidth',1}, ...
+%                                        {'Kind',"503",'Color','green','LineStyle','--','LineWidth',1});
+
+            p_l1 = mapshow(Lane1,'Color','blue','LineStyle','--','Marker','.','MarkerEdgeColor','red'); 
+%             p_l1 = mapshow(Lane1,'SymbolSpec',roadspec);
             p_l2 = mapshow(Lane2,'Color','blue','LineStyle','--','Marker','.','MarkerEdgeColor','red');
             % Convert vehicle states to UTM-K coords            
             
@@ -448,11 +456,60 @@ classdef optimizer < handle
             p = projcrs(32652); % Projected Coordinate Reference System
             [x,y] = projfwd(p,LLA(:,1),LLA(:,2));
             p_v = plot(x,y,'k.');
+            
+            
+            if length(varargin) > 2 % ArcMap is given
+                for i=1:length(varargin)-2
+                    ParamMap = varargin{i+2};
+                    for j=1:length(ParamMap.arc_segments)
+                        seg = ParamMap.arc_segments{j}.params;
+                        enu_init = [seg.x0, seg.y0, 0];
+                        lla_init = enu2lla(enu_init,obj.gnss.lla0,'ellipsoid');
+                        [x_init,y_init] = projfwd(p,lla_init(1),lla_init(2)); % Initial Point Transferred
+                        heading = seg.tau0;
+                        SegPoints = [seg.x0; seg.y0];
+                        SegPointsUTMK = [x_init;y_init];
+                        for k=1:length(seg.kappa)
+                            kappa = seg.kappa(k); L = seg.L(k);
+                            headingPrev = heading;
+                            heading = heading + kappa * L;
+                            headingCurr = heading;
 
-            xlabel('UTM-K X (m)');ylabel('UTM-K Y (m)');
-            title('HD Map')
-%             legend([p_l, p_v],'HD Map Lanes','Vehicle Trajectory')
-            legend(p_l1,'HD Map Link(Blue)/Node(Red)')
+                            heading_ = linspace(headingPrev,headingCurr,1e3);
+                            addedSegPoints = SegPoints(:,end) + 1/kappa * [sin(heading_) - sin(headingPrev);
+                                                                           -cos(heading_) + cos(headingPrev)];
+                            
+                            % Conver addedSegPoints : enu --> lla --> utm-k
+                            addedSegPointsLLA = enu2lla([addedSegPoints;zeros(1,size(addedSegPoints,2))]',obj.gnss.lla0,'ellipsoid');
+                            [addedSegPointsUTMKX,addedSegPointsUTMKY] = projfwd(p,addedSegPointsLLA(:,1),addedSegPointsLLA(:,2));
+
+                            SegPoints = [SegPoints, addedSegPoints];
+                            SegPointsUTMK = [SegPointsUTMK, [addedSegPointsUTMKX';addedSegPointsUTMKY']];
+                            p_node = plot(addedSegPointsUTMKX(1),addedSegPointsUTMKY(1),'co');
+                            plot(addedSegPointsUTMKX(end),addedSegPointsUTMKY(end),'co');
+                        end
+                        p_lane = plot(SegPointsUTMK(1,:),SegPointsUTMK(2,:),'Color',[0.9290 0.6940 0.1250],'LineStyle','-','LineWidth',2);
+                        p_seg = plot(SegPointsUTMK(1,1),SegPointsUTMK(2,1),'ms');
+                        plot(SegPointsUTMK(1,end),SegPointsUTMK(2,end),'ms');
+
+                    end
+                end
+                xlabel('UTM-K X (m)'); ylabel('UTM-K Y (m)'); title('Comparison with HD Map')
+                legend([p_v,p_l1,p_lane,p_node], ...
+                        'Vehicle Trajectory', ...
+                        'HD Map Link(Blue)/Node(Red)', ...
+                        'Arc Spline Ego Lane', ...
+                        'Arc Spline Node Points');
+            else
+                xlabel('UTM-K X (m)'); ylabel('UTM-K Y (m)'); title('HD Map')
+%                 legend([p_l, p_v],'HD Map Lanes','Vehicle Trajectory')
+                legend(p_l1,'HD Map Link(Blue)/Node(Red)')
+            end
+
+
+            
+
+            
         end        
         
         %% Visualize with Reference and Comparison
@@ -1161,13 +1218,14 @@ classdef optimizer < handle
                 end
             end
 
-            if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
-                % Sparse Inverse to extract lane covariance
-                obj.opt.info = jac' * jac;
-                disp('[Computing Sparse Inverse of Information Matrix...]')
-                obj.opt.cov = sparseinv(obj.opt.info);
-                obj.extractLaneCov();
-            end
+%             if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
+%                 % Sparse Inverse to extract lane covariance
+%                 
+%             end
+            obj.opt.info = jac' * jac;
+            disp('[Computing Sparse Inverse of Information Matrix...]')
+            obj.opt.cov = sparseinv(obj.opt.info);
+            obj.extractLaneCov();
         end
 
         %% Optimization Cost Function

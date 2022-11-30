@@ -523,9 +523,9 @@ classdef dataprocessor < handle
             obj.proc_data.lane.FactorValidIdxs = org(laneFactorValidIdxs);
 
             %% Remove Pure Left/Right Turns from lane change
-             % Remove last "right turn" as it is not a lane change scenario
             % This part should be changed for other dataset
-
+            % In the future this part should be done automatically by other
+            % algorithms
 
 
             
@@ -539,7 +539,25 @@ classdef dataprocessor < handle
 
             % Scenario 3
             % remove 1st right turn
-            % 
+            laneFactorValidIntvs(1,1) = 1;
+            LC_dirs = LC_dirs(2:end);
+            laneFactorValidIntvs(1,3) = laneFactorValidIntvs(1,2) - laneFactorValidIntvs(1,1) + 1;
+            % remove 4th right turn
+            laneFactorValidIntvs(4,1) = laneFactorValidIntvs(4,1) - 55;
+            laneFactorValidIntvs(4,3) = laneFactorValidIntvs(4,2) - laneFactorValidIntvs(4,1) + 1;
+            % remove last right turn
+            laneFactorValidIntvs(end,1) = laneFactorValidIntvs(end-1,2) + 30;
+            laneFactorValidIntvs(end,3) = laneFactorValidIntvs(end,2) - laneFactorValidIntvs(end,1) + 1;
+            
+            % Scenario 4
+            % remove 6th right turn
+%             laneFactorValidIntvs(5,:) = [laneFactorValidIntvs(5,1), laneFactorValidIntvs(6,2), laneFactorValidIntvs(6,2) - laneFactorValidIntvs(5,1)+1];
+%             laneFactorValidIntvs(6,:) = [];
+%             LC_dirs(6) = [];
+%             LC_dirs(1) = [];
+
+            obj.proc_data.lane.FactorValidIntvs = laneFactorValidIntvs;
+            obj.proc_data.lane.LC_dirs = LC_dirs;
 
         end
         

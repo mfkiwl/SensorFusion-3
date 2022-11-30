@@ -20,13 +20,14 @@ classdef ArcFitBase < handle
         %% Optimize
         function obj = optimize(obj)
             disp('Running ArcFitBase for stabilizing')
-            X0 = [obj.params.x0; obj.params.y0; obj.params.tau0; obj.params.kappa'; obj.params.L'];
+            X0 = [obj.params.x0; obj.params.y0; obj.params.tau0; 1./obj.params.kappa'; obj.params.L'];
             jac_pattern = obj.getJacPattern();
             options = optimoptions('lsqnonlin', ...
                                    'UseParallel',true, ...
                                    'Display','iter-detailed', ...
                                    'MaxFunctionEvaluations',inf, ...    
-                                   'MaxIterations',500, ...
+                                   'MaxIterations',1e4, ...
+                                   'FunctionTolerance',1e-8,...
                                    'FiniteDifferenceType','forward', ...
                                    'JacobPattern',jac_pattern);
             X = lsqnonlin(@obj.cost_func,X0,[],[],options);
@@ -34,7 +35,7 @@ classdef ArcFitBase < handle
             obj.params.x0 = X(1);
             obj.params.y0 = X(2);
             obj.params.tau0 = X(3);
-            obj.params.kappa = X(3+1:3+n)';
+            obj.params.kappa = 1./X(3+1:3+n)';
             obj.params.L = X(3+n+1:end)';
         end
         
@@ -72,11 +73,12 @@ classdef ArcFitBase < handle
         function res = cost_func(obj,x0)
             n = length(obj.params.kappa);
             initParams = x0(1:3)';
-            kappa = x0(3+1:3+n)';
+            kappa = 1./x0(3+1:3+n)';
             L = x0(3+n+1:end)';
             Init_res = obj.CreateInitBlock(initParams);
             AM_res = obj.CreateAMBlock(initParams,kappa,L);
             ME_res = obj.CreateMEBlock(initParams,kappa,L);
+%             AL_res = obj.CreateALBlock(L);
             res = vertcat(Init_res,AM_res,ME_res);
         end
 
@@ -92,13 +94,20 @@ classdef ArcFitBase < handle
 
             % AM Block
             for i=1:n
-                jac_pattern(2+2*i-1:2+2*i,1:3+i) = ones(2,3+i);
+                idxs = [1:3+i,3+n+1:3+n+i];
+                jac_pattern(2+2*i-1:2+2*i,idxs) = ones(2,3+2*i);
             end
 
             % ME Block
             for i=1:n
-                jac_pattern(2+2*n+obj.m*(i-1)+1:2+2*n+obj.m*i,1:3+i) = ones(obj.m,3+i);
+                idxs = [1:3+i,3+n+1:3+n+i];
+                jac_pattern(2+2*n+obj.m*(i-1)+1:2+2*n+obj.m*i,idxs) = ones(obj.m,3+2*i);
             end
+
+%             % AL Block
+%             for i=1:n
+%                 jac_pattern(2 + 2*n + obj.m*n+1:2 + 2*n + obj.m*n+n,3+n+1:3+2*n) = eye(n);
+%             end
         end
 
         %% Create Init Block
@@ -125,13 +134,22 @@ classdef ArcFitBase < handle
             centerPoints = obj.propCenter(initParams,kappa,L);
             n = length(obj.params.kappa);
             res = zeros(obj.m*n,1);
-            cov = 1e-2;
+            cov = 1e-4;
             for i=1:n
                 Xc = centerPoints(:,i);
                 for j=1:obj.m
                     refPoint = obj.points(:,n+1+obj.m*(i-1)+j);
                     res(obj.m*(i-1)+j) = InvMahalanobis(norm(Xc - refPoint) - 1/abs(kappa(i)),cov);
                 end
+            end
+        end
+        
+        %% Create Arc Length Anchor Block
+        function res = CreateALBlock(obj,L)
+            n = length(obj.params.L);
+            res = zeros(n,1);
+            for i=1:n
+                res(i) = L(i) - obj.params.L(i);
             end
         end
 

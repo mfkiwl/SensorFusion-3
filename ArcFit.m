@@ -58,52 +58,53 @@ classdef ArcFit < handle
             obj.associate();
             % Perform ArcBaseFit to get stablized arc parameters
             obj.TestArcFitBase();
-
-            while ~obj.valid
-                obj.associate();
-
-                jac_pattern = obj.getJacPattern();
-                
-                disp(['[Performing Optimization for Segment ID: ',num2str(obj.id),']']) 
-                X0 = [obj.params.x0; obj.params.y0; obj.params.tau0; obj.params.kappa'];
-    
-                n = length(obj.params.kappa);
-%                 lb = [repmat(-inf,1,3+n),zeros(1,n)];
-                lb = [];
-                ub = [];
-                options = optimoptions('lsqnonlin', ...
-                                       'UseParallel',true, ...
-                                       'Display','iter-detailed', ...
-                                       'MaxFunctionEvaluations',3e4, ...    
-                                       'MaxIterations',200, ...
-                                       'FiniteDifferenceType','forward', ...
-                                       'JacobPattern',jac_pattern);
-                [X,~,~,~,~,~,jacobian] = lsqnonlin(@obj.cost_func,X0,lb,ub,options);
-                
-                obj.params.x0 = X(1);
-                obj.params.y0 = X(2);
-                obj.params.tau0 = X(3);
-                obj.params.kappa = X(3+1:3+n)';
-                [obj.params.L,~] = obj.getArcLength(X(1:3)',obj.params.kappa); 
-%                 break;
-                % Check if current optimized set is truely valid
-                obj.validate();
-                if ~obj.valid
-                    % Replicate the most invalid segment
-                    % Node indices are shifted for efficient segmentation
-                    % Since this process will make the optimized parameters
-                    % unstable, ArcFitBase optimization is done to
-                    % stabilize parameters
-                    obj.replicate();
-                else
-                    disp('[Ending optimization...]')
-                    break;
-                end
-%                 figure(100);
-%                 plot(obj.validity)
-
-            end
             
+            if obj.id ~= 100
+                while ~obj.valid
+                    obj.associate();
+    
+                    jac_pattern = obj.getJacPattern();
+                    
+                    disp(['[Performing Optimization for Segment ID: ',num2str(obj.id),']']) 
+                    X0 = [obj.params.x0; obj.params.y0; obj.params.tau0; 1./obj.params.kappa'];
+        
+                    n = length(obj.params.kappa);
+    %                 lb = [repmat(-inf,1,3+n),zeros(1,n)];
+                    lb = [];
+                    ub = [];
+                    options = optimoptions('lsqnonlin', ...
+                                           'UseParallel',true, ...
+                                           'Display','iter-detailed', ...
+                                           'MaxFunctionEvaluations',3e4, ...    
+                                           'MaxIterations',200, ...
+                                           'FiniteDifferenceType','forward', ...
+                                           'JacobPattern',jac_pattern);
+                    [X,~,~,~,~,~,jacobian] = lsqnonlin(@obj.cost_func,X0,lb,ub,options);
+                    
+                    obj.params.x0 = X(1);
+                    obj.params.y0 = X(2);
+                    obj.params.tau0 = X(3);
+                    obj.params.kappa = 1./X(3+1:3+n)';
+                    [obj.params.L,~] = obj.getArcLength(X(1:3)',obj.params.kappa); 
+    %                 break;
+                    % Check if current optimized set is truely valid
+                    obj.validate();
+                    if ~obj.valid
+                        % Replicate the most invalid segment
+                        % Node indices are shifted for efficient segmentation
+                        % Since this process will make the optimized parameters
+                        % unstable, ArcFitBase optimization is done to
+                        % stabilize parameters
+                        obj.replicate();
+                    else
+                        disp('[Ending optimization...]')
+                        break;
+                    end
+    %                 figure(100);
+    %                 plot(obj.validity)
+    
+                end
+            end
             % Save Optimization Results
             obj.opt.jac = jacobian;
             obj.opt.info = obj.opt.jac' * obj.opt.jac;
@@ -151,16 +152,25 @@ classdef ArcFit < handle
             ref_idxs = [1, obj.params.bnds(:,2)'];
             Points = obj.points(:,ref_idxs);
             bnds = obj.params.bnds;
-            % Add Each Segment's mid points
-            m = 4;
+%             Add Each Segment's mid points
+            m = 8;
             for i=1:size(obj.params.bnds,1)
+%                 m = 8 * (floor((bnds(i,2) - bnds(i,1))/100) + 1);
                 idx = floor(linspace(bnds(i,1),bnds(i,2),m));
+                A = unique(idx);
+                if length(A) ~= length(idx)
+                    disp(idx)
+                    error('Repeated Idx')
+                end
                 % Check if there is any repeated value in idx
                 Points = [Points, obj.points(:,idx(2:m-1))];
             end
             test = ArcFitBase(Points,obj.params,m-2);
             test.optimize();
             obj.params = test.params;
+%             test = ArcFitBase2(obj.points,obj.params);
+%             test.optimize();
+%             obj.params = test.params;
         end
 
     end
@@ -169,7 +179,7 @@ classdef ArcFit < handle
         function res = cost_func(obj,x0)
             n = length(obj.params.kappa);
             initParams = x0(1:3);
-            kappa = x0(3+1:3+n);
+            kappa = 1./x0(3+1:3+n);
             % Need to find arc length for each segment
             [Ls,Xcs] = obj.getArcLength(initParams,kappa);
             obj.opt.L = Ls;
@@ -231,11 +241,11 @@ classdef ArcFit < handle
             idxs = 0:1:n;
 %             idxs = [0,n];
             for i=1:length(idxs)
-                if i == 0 || i == length(idxs)
-                    cov = diag([1e-4, 1e-4]);
+                if i == 1 || i == length(idxs)
+                    cov = diag([1e-5, 1e-5]);
                 else 
 %                     bnd_idx = obj.params.bnds(idxs(i))
-                    cov = diag([1e-2,1e-2]);
+                    cov = diag([1e-4,1e-4]);
                 end
                 res(2*i-1:2*i) = InvMahalanobis(obj.AMres(initParams,kappa,L,idxs(i)),cov);
             end

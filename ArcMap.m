@@ -166,7 +166,7 @@ classdef ArcMap < handle
         
         %% Optimize Parameters
         function obj = optimize(obj)
-
+            % length(obj.arc_segments)
             for i=1:length(obj.arc_segments)
                 initFit = ArcFit(obj.arc_segments{i}, ...
                                  obj.segments{i}, ...                                            
@@ -182,7 +182,6 @@ classdef ArcMap < handle
 %            obj.arcFit{1}.optimize();
             obj.arcFit{1}.RunTestArcFitBase();
         end
-
 
         %% Map Update for 
         function obj = update(obj,states,arc_delta_params)
@@ -296,7 +295,7 @@ classdef ArcMap < handle
         function obj = visualize2DMap(obj)
             % Visualize Parametrization Results            
                 
-            obj.summary();
+%             obj.summary();
 
 
             figure(50); hold on; grid on; axis equal;
@@ -314,8 +313,7 @@ classdef ArcMap < handle
                 m = length(obj.arc_segments{i}.params.kappa);
                 seg = obj.arc_segments{i}.params;
                 heading = seg.tau0;
-                SegPoints = [seg.x0;
-                             seg.y0];
+                SegPoints = [seg.x0; seg.y0];
                 for j=1:m
                     kappa = seg.kappa(j); L = seg.L(j);
                     headingPrev = heading;
@@ -581,7 +579,7 @@ classdef ArcMap < handle
             % Adjust this value to increase or decrease the number of line
             % interpolation. Typically, values smaller than 0.3m is
             % recommended.
-            line_acc_thres = 0.1;
+            line_acc_thres = 0.05;
 
             %% Create Line and visualize current segmentation state 
             init_point = LP(:,intv(1));

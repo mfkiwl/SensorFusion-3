@@ -13,12 +13,33 @@ clear; close all; clc;
 % Scenario 6: 2022-08-05--04-19-33 : Challenging Scenario 2 (굳이?)
 
 base_path = 'D:\SJ_Dataset\2022-08-05\';
-scenario = '2022-08-05--02-57-24';
+scenario2 = '2022-08-05--02-41-03';
+scenario3 = '2022-08-05--02-57-24';
+scenario4 = '2022-08-05--03-13-16';
 
-imu = load(strcat(base_path,scenario,'\results\imu.mat'));
-gnss = load(strcat(base_path,scenario,'\results\gnss.mat'));
-lane = load(strcat(base_path,scenario,'\results\lane.mat'));
-can = load(strcat(base_path,scenario,'\results\can.mat'));
+imu1 = load('imu.mat');
+gnss1 = load('gnss.mat');
+lane1 = load('lane.mat');
+can1 = load('can.mat');
+snap1 = load('snap_raw.mat');
+
+imu2 = load(strcat(base_path,scenario2,'\results\imu.mat'));
+gnss2 = load(strcat(base_path,scenario2,'\results\gnss.mat'));
+lane2 = load(strcat(base_path,scenario2,'\results\lane.mat'));
+can2 = load(strcat(base_path,scenario2,'\results\can.mat'));
+snap2 = load(strcat(base_path,scenario2,'\results\snap_raw.mat'));
+
+imu3 = load(strcat(base_path,scenario3,'\results\imu.mat'));
+gnss3 = load(strcat(base_path,scenario3,'\results\gnss.mat'));
+lane3 = load(strcat(base_path,scenario3,'\results\lane.mat'));
+can3 = load(strcat(base_path,scenario3,'\results\can.mat'));
+snap3 = load(strcat(base_path,scenario3,'\results\snap_raw.mat'));
+
+imu4 = load(strcat(base_path,scenario4,'\results\imu.mat'));
+gnss4 = load(strcat(base_path,scenario4,'\results\gnss.mat'));
+lane4 = load(strcat(base_path,scenario4,'\results\lane.mat'));
+can4 = load(strcat(base_path,scenario4,'\results\can.mat'));
+snap4 = load(strcat(base_path,scenario4,'\results\snap_raw.mat'));
 
 % imu = load('imu.mat');
 % gnss = load('gnss.mat');
@@ -26,10 +47,29 @@ can = load(strcat(base_path,scenario,'\results\can.mat'));
 % can = load('can.mat');
 % snap = load('snap_raw.mat');
 
+gnss_pos = [gnss1.pos(:,1),gnss1.pos(:,2);
+            gnss2.pos(:,1),gnss2.pos(:,2);
+            gnss3.pos(:,1),gnss3.pos(:,2);
+            gnss4.pos(:,1),gnss4.pos(:,2)];
+
+snap_pos = [snap1.lat', snap1.lon';
+            snap2.lat', snap2.lon';
+            snap3.lat', snap3.lon';
+            snap4.lat', snap4.lon'];
+
 figure(25);
-geoplot(gnss.pos(:,1),gnss.pos(:,2),'r.')
+% geoplot(snap_pos(:,1),snap_pos(:,2),'r.');
+p1 = geoplot(snap1.lat,snap1.lon,'r--','LineWidth',1.5); hold on; grid on;
+p2 = geoplot(snap2.lat,snap2.lon,'g--','LineWidth',1.5);
+p3 = geoplot(snap3.lat,snap3.lon,'b--','LineWidth',1.5);
+% p4 = geoplot(snap4.lat,snap4.lon,'c--','LineWidth',1.5);
+
+geobasemap satellite
+title('Full Vehicle Trajectory for Sejong Dataset')
+legend([p1,p2,p3],'Scenario 1','Scenario 2','Scenario 3')
 
 %% Pre Process raw data
+imu = imu3; gnss = gnss3; lane = lane3; can = can3;
 dataset = dataprocessor(imu,gnss,can,lane);
 dataset.process();
 % dataset.visualize();
@@ -40,7 +80,7 @@ lane_ = dataset.proc_data.lane;
 can_ = dataset.proc_data.can;
 bias_ = dataset.proc_data.initBias;
 t_ = dataset.proc_data.t;
-snap = 0;
+snap = [];
 
 %% Optimizer Options 
 
@@ -53,7 +93,7 @@ covs_.prior.V = diag([1^2, 1^2, 1^2]);
 covs_.prior.P = diag([5^2, 5^2, 5^2]);
 covs_.prior.Bg = diag([1e-3, 1e-3, 1e-3]);
 covs_.prior.Ba = diag([0.1^2, 0.1^2, 0.1^2]);
-covs_.prior.WSF = 1e-2;
+covs_.prior.WSF = 1e-4;
 % covs_.prior.Params = diag([1e-4,1e-6,1e-4]);
 covs_.prior.Params = 1e-5;
 
@@ -63,11 +103,11 @@ covs_.imu.GyroscopeBiasNoise = 5e-9 * eye(3);
 covs_.imu.GyroscopeNoise = 1e-5 * eye(3);
 covs_.imu.AccelerometerBiasNoise = 5e-7* eye(3);
 covs_.imu.AccelerometerNoise = 5/3 * 1e-3 * eye(3);
-covs_.imu.ScaleFactorNoise = 1e-5;
+covs_.imu.ScaleFactorNoise = 1e-4;
 
 % WSS 
 % covs_.wss = diag([1e-2,1e-5,1e-5]);
-covs_.wss = 1e-4 * eye(3);
+covs_.wss = 3e-2 * eye(3);
 
 % Optimization Options
 options = struct();
@@ -152,7 +192,7 @@ sol.full.visualize();
 
 %% 
 sol.full.map.visualize2DMap();
-saved_map = sol.full.map; %% Save data 
+% saved_map = sol.full.map; %% Save data 
 %% Compare with HD Map
 % HD Map Data obtained from: http://map.ngii.go.kr/ms/pblictn/preciseRoadMap.do
 %
@@ -165,13 +205,21 @@ saved_map = sol.full.map; %% Save data
 % D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\B2_SURFACELINEMARK.shp
 % D:\SJ_Dataset\HDMap\Map2\SEC02_세종정부청사_주변\HDMap_UTMK_타원체고\B2_SURFACELINEMARK.shp
 
+% Load Saved data
+
+% ArcMap1 = load("ResultData\MapSC1.mat");
+% ArcMap2 = load("ResultData\MapSC2.mat");
+ArcMap3 = load("ResultData\MapSC3.mat");
+% ArcMap1.saved_map.visualize2DMap();
+% ArcMap2.saved_map.visualize2DMap();
+% ArcMap3.saved_map.visualize2DMap();
+
 T1 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\B2_SURFACELINEMARK.shp");
 T2 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC02_세종정부청사_주변\HDMap_UTMK_타원체고\B2_SURFACELINEMARK.shp");
 % mapshow(T1); hold on;
 % mapshow(T2);
-sol.full.visualizeHD(T1,T2);
-% T2 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A1_NODE.dbf");
-% T3 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A2_LINK.dbf");
+sol.full.visualizeHD(T1,T2,ArcMap3.saved_map);
+
 
 % for i=1:9
 %     string = num2str(i);
@@ -185,3 +233,7 @@ sol.full.visualizeHD(T1,T2);
 
 % T1 = readgeotable("D:\NaverLabsDataset\pangyo\road_layout\1.0.0\pangyo_A3_LINK_3D.shp");
 % mapshow(T1)
+
+%% Test
+T3 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A1_NODE.shp");
+T4 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A2_LINK.shp");
