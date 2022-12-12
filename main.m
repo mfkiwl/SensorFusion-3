@@ -218,8 +218,9 @@ T1 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_U
 T2 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC02_세종정부청사_주변\HDMap_UTMK_타원체고\B2_SURFACELINEMARK.shp");
 % mapshow(T1); hold on;
 % mapshow(T2);
-sol.full.visualizeHD(T1,T2,ArcMap3.saved_map);
 
+sol.full.visualizeHD(T1,T2);
+% sol.full.visualizeHD(T1,T2,ArcMap3.saved_map);
 
 % for i=1:9
 %     string = num2str(i);

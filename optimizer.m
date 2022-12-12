@@ -158,61 +158,44 @@ classdef optimizer < handle
                 elseif strcmp(obj.opt.options.Algorithm,'TR')
                     obj.TrustRegion();
                 end
-%             else
-%                 % Lane data is used for optimization
-%                 % Current model: Continuous Piecewise Arc Spline Lane Model
-%                 % 
-%                 % Phase 2 Optimization
-%                 % 
-%                 % =================<Optimization step>=================
-%                 % 1. Perform data association with current optimized
-%                 % vehicle states and arc parameters
-%                 %
-%                 % 2. Fully converge the problem with iterative data
-%                 % association
-%                 %
-%                 % 3. Validate optimization results and add subsegments if
-%                 % needed. 
-%                 %
-%                 % 4. Until all segments are valid, repeat steps 1 ~ 3.
-%                 % =====================================================
-%                 %
-%                 
-%                 obj.phase = 2;
-%                 obj.opt.options.Algorithm = 'TR';
-%                 obj.opt.options.IterThres = inf; % Change if needed
-%                 obj.opt.options.CostThres = 1;
-%                 valid = false;
-% 
-%                 while ~valid
-%                     
-%                     obj.updateTracker();                    
-%                     obj.opt.x0 = zeros(16*n + obj.opt.seg_tracker(end),1);
-% 
-%                     % Step 2: Full Convergence 
-%                     if strcmp(obj.opt.options.Algorithm,'GN')
-%                         obj.GaussNewton();
-%                     elseif strcmp(obj.opt.options.Algorithm,'LM')
-%                         obj.LevenbergMarquardt();
-%                     elseif strcmp(obj.opt.options.Algorithm,'TR')
-%                         obj.TrustRegion();
-%                     end                    
-%                     
-%                     % Step 3: Validate and perform data association 
-%                     % Create new arc segments if needed 
-%                     
-%                     obj.map.validate();
-%                     
-%                     % Step 1 is done inside the validation function
-%                     valid = obj.map.valid_flag;
-% 
-%                     % Step 4: Repeat 1 ~ 3 until all segments are valid
-%                     % Show optimization results after optimization
-%                     % 
-%                     % Number of Sub-segments for each segments
-%                     % Summary for each Sub-segments: Curvature, Arc Length
-%                     % Summary for each Segments: Curvature, Arc Length
-%                 end               
+            else
+                % Lane data is used for optimization
+                % Current model: Continuous Piecewise Arc Spline Lane Model
+                % 
+                % Phase 2 Optimization
+                % 
+                % =================<Optimization step>=================
+                % 1. Perform data association with current optimized
+                % vehicle states and arc parameters
+                %
+                % 2. Fully converge the problem with iterative data
+                % association
+                %
+                % 3. Validate optimization results and add subsegments if
+                % needed. 
+                %
+                % 4. Until all segments are valid, repeat steps 1 ~ 3.
+                % =====================================================
+                %
+                
+                valid = false;
+
+                while ~valid
+                    
+                    obj.opt.x0 = zeros(16*n,1);  
+
+                    % Step 2: Full Convergence 
+                    if strcmp(obj.opt.options.Algorithm,'GN')
+                        obj.GaussNewton();
+                    elseif strcmp(obj.opt.options.Algorithm,'LM')
+                        obj.LevenbergMarquardt();
+                    elseif strcmp(obj.opt.options.Algorithm,'TR')
+                        obj.TrustRegion();
+                    end                    
+                    
+                    % Check if final cost is very close to initial cost
+                    
+                end               
             end
         end
          
@@ -479,7 +462,7 @@ classdef optimizer < handle
                             addedSegPoints = SegPoints(:,end) + 1/kappa * [sin(heading_) - sin(headingPrev);
                                                                            -cos(heading_) + cos(headingPrev)];
                             
-                            % Conver addedSegPoints : enu --> lla --> utm-k
+                            % Convert addedSegPoints : enu --> lla --> utm-k
                             addedSegPointsLLA = enu2lla([addedSegPoints;zeros(1,size(addedSegPoints,2))]',obj.gnss.lla0,'ellipsoid');
                             [addedSegPointsUTMKX,addedSegPointsUTMKY] = projfwd(p,addedSegPointsLLA(:,1),addedSegPointsLLA(:,2));
 
@@ -512,7 +495,7 @@ classdef optimizer < handle
             
         end        
         
-        %% Visualize with Reference and Comparison
+        %% Visualize with Reference and Comparison * Only when there is reference data
         function visualizeRef(obj,varargin)
 
             ref = varargin{1};
@@ -1945,240 +1928,6 @@ classdef optimizer < handle
                 cnt = cnt + 3 + 2 * num_subseg;
             end
             obj.map.update(obj.states,arc_delta_params);
-        end
-        
-        %% Arc Spline based Numerical Jacobian Computation Phase 2
-        function [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = getASJac(obj,R,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir)
-            eps = 1e-6; eps_kappa = 1e-10; minL = obj.lane.minL;
-            anchored_res = obj.getASRes(R,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
-            
-            r_jac = zeros(1,3); p_jac = zeros(1,3); 
-            param_jac = zeros(1,3); kappa_jac = zeros(1,SubSegIdx);
-            L_jac = zeros(1,SubSegIdx);
-            if strcmp(dir,'left')
-                cov = obj.lane.lystd(lane_idx,k)^2;
-            elseif strcmp(dir,'right')
-                cov = obj.lane.rystd(lane_idx,k)^2;
-            end
-            
-            % Add perturbation to all variables of
-            % interest to find jacobian
-
-            % 1: Perturbation to Rotational Matrix
-
-            for i=1:3
-                rot_ptb_vec = zeros(3,1);
-                rot_ptb_vec(i) = eps;
-                R_ptb = R * Exp_map(rot_ptb_vec); 
-                res_ptb = obj.getASRes(R_ptb,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
-                r_jac(i) = (res_ptb - anchored_res)/eps;
-            end
-            r_jac = InvMahalanobis(r_jac,cov);
-
-            % 2: Perturbation to Position
-            
-            for i=1:3
-                pos_ptb_vec = zeros(3,1);
-                pos_ptb_vec(i) = eps;
-                P_ptb = P + R * pos_ptb_vec;
-                res_ptb = obj.getASRes(R,P_ptb,initParams,kappa,L,SubSegIdx,lane_idx,k,dir);
-                p_jac(i) = (res_ptb - anchored_res)/eps;
-            end
-            p_jac = InvMahalanobis(p_jac,cov);
-
-            % 3: Perturbation to Segment initParams
-            for i=1:3
-                initParams_ptb_vec = zeros(1,3);
-                initParams_ptb_vec(i) = eps;
-                initParams_ptb = initParams + initParams_ptb_vec;
-                res_ptb = obj.getASRes(R,P,initParams_ptb,kappa,L,SubSegIdx,lane_idx,k,dir);
-                param_jac(i) = (res_ptb - anchored_res)/eps;
-            end
-            param_jac = InvMahalanobis(param_jac,cov);
-
-            % 4: Perturbation to Sub-Segment Params (curvature)
-            for i=1:SubSegIdx
-                % For sub-segment parameter perturbation, variables "after"
-                % the target sub-segment index are not used!
-                kappa_ptb_vec = zeros(1,length(kappa));
-                kappa_ptb_vec(i) = eps_kappa;
-                kappa_ptb = kappa + kappa_ptb_vec;
-                res_ptb = obj.getASRes(R,P,initParams,kappa_ptb,L,SubSegIdx,lane_idx,k,dir);
-                kappa_jac(i) = (res_ptb - anchored_res)/eps_kappa;
-            end
-            kappa_jac = InvMahalanobis(kappa_jac,cov);
-
-            % 5: Perturbation to Sub-Segment Params (arc-length)
-            for i=1:SubSegIdx
-                L_ptb_vec = zeros(1,length(L));
-                L_ptb_vec(i) = eps;
-                % L positive constraint
-                % actual optimization variable is sqrt(L)
-                L_ptb = ((L - minL).^(1/2) + L_ptb_vec).^2 + minL;
-                res_ptb = obj.getASRes(R,P,initParams,kappa,L_ptb,SubSegIdx,lane_idx,k,dir);
-                L_jac(i) = (res_ptb - anchored_res)/eps;
-            end
-            L_jac = InvMahalanobis(L_jac,cov);
-            
-            anchored_res = InvMahalanobis(anchored_res,cov);
-        end
-        
-        %% Arc Spline based measurement residual Phase 2
-        function res = getASRes(obj,R,P,initParams,kappa,L,SubSegIdx,lane_idx,k,dir)
-            rpy = dcm2rpy(R); psi = rpy(3);
-            R2d = [cos(psi) -sin(psi);
-                   sin(psi) cos(psi)];
-            if strcmp(dir,'left')
-                dij = obj.lane.ly(lane_idx,k);
-%                 zij = obj.lane.lz(lane_idx,k);
-            elseif strcmp(dir,'right')
-                dij = obj.lane.ry(lane_idx,k);
-%                 zij = obj.lane.rz(lane_idx,k);
-            end
-            % Propgate arc center point until the matched sub-segment 
-            centerPoints = obj.propCenter(initParams,kappa,L);
-            Xc = centerPoints(:,SubSegIdx);
-%             Pl = P + R * [10*(k-1);dij;zij];
-%             
-%             kappa_ = kappa(SubSegIdx);
-%             res = sqrt((Xc - Pl(1:2))' * (Xc - Pl(1:2))) - abs(1/kappa_);            
-
-            % WARNING! Need to double check if this logic is appropriate
-            % Computing "distance" residual
-            % Very unstable, creating complex residual often
-            Pp = P(1:2) + R2d * [10*(k-1);0];
-            Xc_b = R2d' * (Xc - Pp); xc_b = Xc_b(1); yc_b = Xc_b(2);
-            kappa_ = kappa(SubSegIdx);
-            if kappa_ > 0
-                res = yc_b - sqrt((1/kappa_)^2 - xc_b^2) - dij;
-            else
-                res = yc_b + sqrt((1/kappa_)^2 - xc_b^2) - dij;
-            end
-        end
-
-        %% Arc Spline based Numerical Jacobian Computation 2 Phase 2
-        function [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = getAS2Jac(obj,R,P,initParams,kappa,L,lane_idx,dir,SubSegIdx)
-            eps = 1e-6; eps_kappa = 1e-10; minL = obj.lane.minL;
-%             eps_L = 1e-6 * linspace(1,length(L));
-            eps_L = 5;
-            anchored_res = obj.getAS2Res(R,P,initParams,kappa,L,lane_idx,dir,SubSegIdx);
-            
-            r_jac = zeros(2,3); p_jac = zeros(2,3); 
-            param_jac = zeros(2,3);
-            kappa_jac = zeros(2,SubSegIdx); L_jac = zeros(2,SubSegIdx);
-
-            if dir == 1
-                cov = diag([0.01^2, obj.lane.lystd(lane_idx,1)^2]);
-            elseif dir == 2
-                cov = diag([0.01^2, obj.lane.rystd(lane_idx,1)^2]);
-            end
-%             cov = 1e-5 * eye(1);
-            
-            % Add perturbation to all variables of
-            % interest to find jacobian
-
-            % 1: Perturbation to Rotational Matrix
-            
-            for i=1:3
-                rot_ptb_vec = zeros(3,1);
-                rot_ptb_vec(i) = eps;
-                R_ptb = R * Exp_map(rot_ptb_vec);
-                res_ptb = obj.getAS2Res(R_ptb,P,initParams,kappa,L,lane_idx,dir,SubSegIdx);               
-                r_jac(:,i) = (res_ptb - anchored_res)/eps;
-            end
-            r_jac = InvMahalanobis(r_jac,cov);
-
-            % 2: Perturbation to Position
-            
-            for i=1:3
-                pos_ptb_vec = zeros(3,1);
-                pos_ptb_vec(i) = eps;
-                P_ptb = P + R * pos_ptb_vec;                                
-                res_ptb = obj.getAS2Res(R,P_ptb,initParams,kappa,L,lane_idx,dir,SubSegIdx);
-                p_jac(:,i) = (res_ptb - anchored_res)/eps;
-            end
-            p_jac = InvMahalanobis(p_jac,cov);
-
-            % 3: Perturbation to Segment initParams
-            for i=1:3
-                initParams_ptb_vec = zeros(1,3);
-                initParams_ptb_vec(i) = eps;
-                initParams_ptb = initParams + initParams_ptb_vec;               
-                res_ptb = obj.getAS2Res(R,P,initParams_ptb,kappa,L,lane_idx,dir,SubSegIdx);                
-                param_jac(:,i) = (res_ptb - anchored_res)/eps;
-            end
-            param_jac = InvMahalanobis(param_jac,cov);
-
-            % 4: Perturbation to Sub-Segment Params (kappa, L)
-            for i=1:SubSegIdx
-                kappa_ptb_vec = zeros(1,length(kappa));
-                kappa_ptb_vec(i) = eps_kappa;
-                kappa_ptb = kappa + kappa_ptb_vec;     
-                
-                L_ptb_vec = zeros(1,length(L));
-                L_ptb_vec(i) = eps_L;
-                % L positive constraint
-                % actual optimization variable is sqrt(L)
-                L_ptb = ((L - minL).^(1/2) + L_ptb_vec).^2 + minL;   
-
-                res_ptbK = obj.getAS2Res(R,P,initParams,kappa_ptb,L,lane_idx,dir,SubSegIdx); 
-                res_ptbL = obj.getAS2Res(R,P,initParams,kappa,L_ptb,lane_idx,dir,SubSegIdx); 
-
-                kappa_jac(:,i) = (res_ptbK - anchored_res)/eps_kappa;
-                L_jac(:,i) = (res_ptbL - anchored_res)/eps_L;
-            end
-            kappa_jac = InvMahalanobis(kappa_jac,cov);
-            L_jac = InvMahalanobis(L_jac,cov);
-            
-            anchored_res = InvMahalanobis(anchored_res,cov);
-        end
-        
-        %% Arc Spline based measurement 2 residual Phase 2
-        function res = getAS2Res(obj,R,P,initParams,kappa,L,lane_idx,dir,SubSegIdx)
-            rpy = dcm2rpy(R); psi = rpy(3);
-            R2d = [cos(psi) -sin(psi);
-                   sin(psi) cos(psi)];
-
-            % Propgate arc node point until the last sub-segment
-%             x = initParams(1); y = initParams(2); heading = initParams(3);   
-%             for i=1:SubSegIdx
-%                 x = x + 1/kappa(i) * (sin(heading + kappa(i) * L(i)) - sin(heading));
-%                 y = y - 1/kappa(i) * (cos(heading + kappa(i) * L(i)) - cos(heading));
-%                 heading = heading + kappa(i) * L(i);
-%             end
-            if dir == 1
-                dij = obj.lane.ly(lane_idx,1);
-%                 zij = obj.lane.lz(lane_idx,1);
-            elseif dir == 2
-                dij = obj.lane.ry(lane_idx,1);
-%                 zij = obj.lane.rz(lane_idx,1);
-            end
-            
-            nodePoints = obj.propNode(initParams,kappa,L);
-            X = nodePoints(:,SubSegIdx+1);
-
-%             if strcmp(flag,'init')
-%                 X = [initParams(1);initParams(2)];                
-%             elseif strcmp(flag,'last')
-%                 nodePoints = obj.propNode(initParams,kappa,L);
-%                 X = nodePoints(:,end);
-%             end
-            
-            Xb = R2d' * (X - P(1:2)); xb = Xb(1); yb = Xb(2);            
-            % xb should be 0 (ideal)
-            res = [xb;yb - dij];      
-        end
-        
-        %% Update segment tracker
-        function obj = updateTracker(obj)
-            obj.opt.seg_tracker = 0;
-            num = 0;
-            for i=1:length(obj.map.arc_segments)
-                num = num + 3 + 2 * length(obj.map.arc_segments{i}.kappa);
-                % x0, y0, tau0 of every segment are to be optimized
-                % kappa and L of every sub-segment are to be optimized
-                obj.opt.seg_tracker = [obj.opt.seg_tracker num];
-            end
         end
         
         %% Matrix Singularity Analysis
