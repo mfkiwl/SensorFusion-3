@@ -238,6 +238,18 @@ lane_.prev_num = 6; % Set preview number
 lane_.prob_thres = 0.6; % Set lane prob threshold for discarding low-reliability data
 lane_.minL = 5; % Minimum arc length (to prevent singularity)
 
+%% Possible Lane Change Intervals
+% plot(lane_.l_inter(DSTART:DEND,1),'r-'); hold on; grid on;
+% plot(lane_.r_inter(DSTART:DEND,1),'b-');
+if sc == 1
+    ub1 = find(lane_.state_idxs == DSTART + 1024);
+    lb2 = find(lane_.state_idxs == DSTART + 1099);
+    lane_.FactorValidIntvs = [1,ub1;lb2,length(imu_)];
+    lane_.LC_dirs = {'right'};
+elseif sc == 2
+    lane_.FactorValidIntvs = [1,length(imu_)+1];
+    lane.LC_dirs = {};
+end
 %% INS + GNSS Fusion 
 % sol = struct();
 % sol.basic = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'basic',options);
@@ -250,7 +262,7 @@ sol = struct();
 sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
 sol.partial.optimize();
 %%
-sol.partial.visualize();
+sol.partial.update('2-phase');
 
 
 %% Processing VINS, DSO

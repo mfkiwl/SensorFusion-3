@@ -57,7 +57,7 @@ classdef optimizer < handle
         bias = {} % bias variables saver
         bgd_thres = 1e-2; % Gyro bias repropagation threshold
         bad_thres = 1e-1; % Accel bias repropagation threshold
-
+        
         map % map variable for 'full' or '2-phase' mode
         phase % phase number for 
         opt = struct() % Optimized results
@@ -116,13 +116,34 @@ classdef optimizer < handle
             end
             
             if strcmp(obj.mode,'2-phase')
-                disp("[Updating mode to 2-phase, creating Map information...]")
-                % Create and initialize Map
-                % Initial segmentation and data association is done in this
-                % step automatically
-                % Complete arc fitting is done in this step
-                obj.map = ArcMap(obj.states,obj.lane,obj.lane.prob_thres,obj.opt.LeftCov,obj.opt.RightCov);
-                obj.map.optimize();
+%                 disp("[Updating mode to 2-phase, creating Map information...]")
+%                 % Create and initialize Map
+%                 % Initial segmentation and data association is done in this
+%                 % step automatically
+%                 % Complete arc fitting is done in this step
+%                 obj.map = ArcMap(obj.states,obj.lane,obj.lane.prob_thres,obj.opt.LeftCov,obj.opt.RightCov);
+%                 obj.map.optimize();
+                obj.mode = '2-phase';
+
+                obj.map.segment_info = zeros(2,size(obj.lane.FactorValidIntvs,1));
+
+                LeftSegNum = 1; RightSegNum = 2;
+                obj.map.segment_info(1,1) = LeftSegNum;
+                obj.map.segment_info(2,1) = RightSegNum;
+    
+                for i=1:length(obj.lane.LC_dirs)
+                    if strcmp(obj.lane.LC_dirs{i},'left')
+                        tmp = LeftSegNum;
+                        LeftSegNum = max([LeftSegNum,RightSegNum]) + 1;
+                        RightSegNum = tmp;
+                    elseif strcmp(obj.lane.LC_dirs{i},'right')
+                        tmp = RightSegNum;
+                        RightSegNum = max([LeftSegNum, RightSegNum]) + 1;
+                        LeftSegNum = tmp;
+                    end
+                    obj.map.segment_info(1,i+1) = LeftSegNum;
+                    obj.map.segment_info(2,i+1) = RightSegNum;            
+                end
             end           
         end
 
@@ -159,43 +180,48 @@ classdef optimizer < handle
                     obj.TrustRegion();
                 end
             else
-                % Lane data is used for optimization
-                % Current model: Continuous Piecewise Arc Spline Lane Model
+                % Previous Arc Spline based optimization is deprecated
+                % (Very unstable)
+                % Point-based optimization
                 % 
-                % Phase 2 Optimization
+                % Current Optimization changes data association every
+                % iteration
+                %
+                % Things to check
+                % 1. Multiple Optimization with fixed data association
+                % 2. 2D/3D Model difference
                 % 
-                % =================<Optimization step>=================
-                % 1. Perform data association with current optimized
-                % vehicle states and arc parameters
-                %
-                % 2. Fully converge the problem with iterative data
-                % association
-                %
-                % 3. Validate optimization results and add subsegments if
-                % needed. 
-                %
-                % 4. Until all segments are valid, repeat steps 1 ~ 3.
-                % =====================================================
-                %
-                
-                valid = false;
+                % 
+                if strcmp(obj.opt.options.Algorithm,'GN')
+                    obj.GaussNewton();
+                elseif strcmp(obj.opt.options.Algorithm,'LM')
+                    obj.LevenbergMarquardt();
+                elseif strcmp(obj.opt.options.Algorithm,'TR')
+                    obj.TrustRegion();
+                end  
 
-                while ~valid
-                    
-                    obj.opt.x0 = zeros(16*n,1);  
+%                 prev_cost = inf;
+%                 curr_cost = 0;
+%                 cost_thres = 1e2; % 
+% 
+%                 while abs(curr_cost - prev_cost) < cost_thres
+%                     prev_cost = curr_cost;
+%                     obj.opt.x0 = zeros(16*n,1);  
+% 
+%                     % Step 2: Full Convergence 
+%                     if strcmp(obj.opt.options.Algorithm,'GN')
+%                         obj.GaussNewton();
+%                     elseif strcmp(obj.opt.options.Algorithm,'LM')
+%                         obj.LevenbergMarquardt();
+%                     elseif strcmp(obj.opt.options.Algorithm,'TR')
+%                         obj.TrustRegion();
+%                     end                    
+%                     
+%                     % Check if final cost is very close to initial cost
+%                     
+%                 end               
 
-                    % Step 2: Full Convergence 
-                    if strcmp(obj.opt.options.Algorithm,'GN')
-                        obj.GaussNewton();
-                    elseif strcmp(obj.opt.options.Algorithm,'LM')
-                        obj.LevenbergMarquardt();
-                    elseif strcmp(obj.opt.options.Algorithm,'TR')
-                        obj.TrustRegion();
-                    end                    
-                    
-                    % Check if final cost is very close to initial cost
-                    
-                end               
+                 
             end
         end
          
@@ -1208,27 +1234,25 @@ classdef optimizer < handle
             obj.opt.info = jac' * jac;
             disp('[Computing Sparse Inverse of Information Matrix...]')
             obj.opt.cov = sparseinv(obj.opt.info);
-            obj.extractLaneCov();
+%             obj.extractLaneCov();
         end
 
         %% Optimization Cost Function
         function [res,jac] = cost_func(obj,x0)
             obj.retract(x0,'normal');
+
+            if strcmp(obj.mode,'2-phase')
+                obj.DataAssociation2D();
+            end
+
             [Pr_res,Pr_jac] = obj.CreatePrBlock();
             [MM_res,MM_jac] = obj.CreateMMBlock();
             [GNSS_res,GNSS_jac] = obj.CreateGNSSBlock();
             [WSS_res,WSS_jac] = obj.CreateWSSBlock();
+            [LM_res,LM_jac] = obj.CreateLMBlock2D();
             
-            % Check Jacobian computation time
-%             t_start = tic;
-            [AS_res,AS_jac] = obj.CreateASBlock();
-%             elapsed_t = toc(t_start);
-%             disp(['AS Jacobian Computation Time: ',num2str(elapsed_t),'s'])
-            [AS2_res,AS2_jac] = obj.CreateAS2Block();
-%             [AL_res,AL_jac] = obj.CreateALBlock();
-            
-            res = vertcat(Pr_res,MM_res,GNSS_res,WSS_res,AS_res,AS2_res);
-            jac = vertcat(Pr_jac,MM_jac,GNSS_jac,WSS_jac,AS_jac,AS2_jac);   
+            res = vertcat(Pr_res,MM_res,GNSS_res,WSS_res,LM_res);
+            jac = vertcat(Pr_jac,MM_jac,GNSS_jac,WSS_jac,LM_jac);   
             obj.opt.jac = jac;
         end
         
@@ -1499,299 +1523,19 @@ classdef optimizer < handle
             end
         end
         
-        %% Arc Spline based Measurement Residual and Jacobian 
-        function [AS_res,AS_jac] = CreateASBlock(obj)
-            % Arc Spline based lane measurement model, Phase 2
-            % Pre-computed data association matrix is used for state-map
-            % segment matching
+        %% Lane Residual and Jacobian
+        function [LM_res,LM_jac] = CreateLMBlock2D(obj)
             if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
-                AS_res = []; AS_jac = [];
+                LM_res = []; LM_jac = [];
             else
-                % Due to the complexity of computing jacobian of
-                % measurement function algebraically, numerical jacobian
-                % computation is implemented for this block
-                % For computation speed, forward-difference is adopted
-                % 
-                % This part is to be merged with phase 3 functions after
-                % debugging process
-
-                n = size(obj.lane.FactorValidIntvs,1);
-                m = length(obj.states);
-                
-                blk_heightL = nnz(obj.map.assocL);
-                blk_heightR = nnz(obj.map.assocR);
-                blk_width = length(obj.opt.x0);
-                AS_resL = zeros(blk_heightL,1);
-                AS_resR = zeros(blk_heightR,1);
-                
-                I_L = zeros(1,9*blk_heightL + 2 * sum(obj.map.assocL,'all'));
-                J_L = I_L; V_L = I_L;
-
-                I_R = zeros(1,9*blk_heightR + 2 * sum(obj.map.assocR,'all'));
-                J_R = I_R; V_R = I_R;
-
-                cntL = 1; cntR = 1;
-                jac_cntL = 0; jac_cntR = 0;
-                for i=1:n
-                    lb = obj.lane.FactorValidIntvs(i,1);
-                    ub = obj.lane.FactorValidIntvs(i,2);
-
-                    leftSegIdx = obj.map.segment_info(1,i);
-                    rightSegIdx = obj.map.segment_info(2,i);
-                    leftSeg = obj.map.arc_segments{leftSegIdx};
-                    rightSeg = obj.map.arc_segments{rightSegIdx};
-
-                    for j=lb:ub
-                        R = obj.states{j}.R;
-                        P = obj.states{j}.P;
-                        lane_idx = obj.lane.state_idxs(j);
-                        
-%                         if obj.phase == 1
-%                             max_prev = 1;
-%                         elseif obj.phase == 2
-%                             max_prev = ;
-%                         end
-
-                        for k=1:obj.lane.prev_num                           
-                            leftSubSegIdx = obj.map.assocL(j,k);
-                            rightSubSegIdx = obj.map.assocR(j,k);
-    
-                            if leftSubSegIdx > 0
-                                initParams = [leftSeg.x0, leftSeg.y0, leftSeg.tau0];
-                                [r_jac, p_jac, param_jac, kappa_jac, L_jac, anchored_res] = ...
-                                obj.getASJac(R,P,initParams,leftSeg.kappa,leftSeg.L,leftSubSegIdx,lane_idx,k,'left');
-    
-                                AS_resL(cntL) = anchored_res;
-    
-                                % Warning sign for complex residual
-                                if ~isreal(anchored_res)
-                                    warning(['Complex residual(Left) detected at state_idx: ',num2str(j),...
-                                             ', segment idx: ',num2str(leftSegIdx),...
-                                             ', sub-segment idx: ',num2str(leftSubSegIdx)])                                
-                                end
-    
-                                idxL = 16*m+obj.opt.seg_tracker(leftSegIdx);
-                                idxkL = idxL + 3;
-                                idxlL = idxL + 3 + length(leftSeg.kappa);
-                                [I_rL,J_rL,V_rL] = sparseFormat(cntL,9*(j-1)+1:9*(j-1)+3,r_jac);
-                                [I_pL,J_pL,V_pL] = sparseFormat(cntL,9*(j-1)+7:9*(j-1)+9,p_jac);
-                                [I_PL,J_PL,V_PL] = sparseFormat(cntL,idxL+1:idxL+3,param_jac);
-                                [I_kL,J_kL,V_kL] = sparseFormat(cntL,idxkL+1:idxkL+leftSubSegIdx,kappa_jac);
-                                [I_lL,J_lL,V_lL] = sparseFormat(cntL,idxlL+1:idxlL+leftSubSegIdx,L_jac);
-                                
-                                I_L(jac_cntL+1:jac_cntL+9+2*leftSubSegIdx) = [I_rL, I_pL, I_PL, I_kL, I_lL];
-                                J_L(jac_cntL+1:jac_cntL+9+2*leftSubSegIdx) = [J_rL, J_pL, J_PL, J_kL, J_lL];
-                                V_L(jac_cntL+1:jac_cntL+9+2*leftSubSegIdx) = [V_rL, V_pL, V_PL, V_kL, V_lL];
-    
-                                cntL = cntL + 1;
-                                jac_cntL = jac_cntL + 9 + 2 * leftSubSegIdx;
-                            end
-    
-                            if rightSubSegIdx > 0
-                                initParams = [rightSeg.x0, rightSeg.y0, rightSeg.tau0];
-                                [r_jac, p_jac, param_jac, kappa_jac, L_jac, anchored_res] = ...
-                                obj.getASJac(R,P,initParams,rightSeg.kappa,rightSeg.L,rightSubSegIdx,lane_idx,k,'right');
-    
-                                AS_resR(cntR) = anchored_res;
-    
-                                % Warning sign for complex residual
-                                if ~isreal(anchored_res)
-                                    warning(['Complex residual(Right) detected at state_idx: ',num2str(j),...
-                                             ', segment idx: ',num2str(rightSegIdx),...
-                                             ', sub-segment idx: ',num2str(rightSubSegIdx)])                                
-                                end
-    
-                                idxR = 16*m+obj.opt.seg_tracker(rightSegIdx);
-                                idxkR = idxR + 3;
-                                idxlR = idxR + 3 + length(rightSeg.kappa);
-                                [I_rR,J_rR,V_rR] = sparseFormat(cntR,9*(j-1)+1:9*(j-1)+3,r_jac);
-                                [I_pR,J_pR,V_pR] = sparseFormat(cntR,9*(j-1)+7:9*(j-1)+9,p_jac);
-                                [I_PR,J_PR,V_PR] = sparseFormat(cntR,idxR+1:idxR+3,param_jac);
-                                [I_kR,J_kR,V_kR] = sparseFormat(cntR,idxkR+1:idxkR+rightSubSegIdx,kappa_jac);
-                                [I_lR,J_lR,V_lR] = sparseFormat(cntR,idxlR+1:idxlR+rightSubSegIdx,L_jac);
-                                
-                                I_R(jac_cntR+1:jac_cntR+9+2*rightSubSegIdx) = [I_rR, I_pR, I_PR, I_kR, I_lR];
-                                J_R(jac_cntR+1:jac_cntR+9+2*rightSubSegIdx) = [J_rR, J_pR, J_PR, J_kR, J_lR];
-                                V_R(jac_cntR+1:jac_cntR+9+2*rightSubSegIdx) = [V_rR, V_pR, V_PR, V_kR, V_lR];
-    
-                                cntR = cntR + 1;
-                                jac_cntR = jac_cntR + 9 + 2 * rightSubSegIdx;
-                            end
-                        end
-                    end
-                end
-                AS_res = vertcat(AS_resL,AS_resR);
-                AS_jacL = sparse(I_L,J_L,V_L,blk_heightL,blk_width);
-                AS_jacR = sparse(I_R,J_R,V_R,blk_heightR,blk_width);
-                AS_jac = vertcat(AS_jacL,AS_jacR);
-
-                obj.opt.AS_res = AS_res;
-                obj.opt.AS_jac = AS_jac;
+                n = length(obj.states);
+                blk_width = 16*n;
+            
             end
-        end
-
-        %% Arc Spline based Measurement 2 Residual and Jacobian Phase 2
-        function [AS2_res,AS2_jac] = CreateAS2Block(obj)
-            if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
-                AS2_res = []; AS2_jac = [];
-            else
-                n = length(obj.map.arc_segments);
-                m = length(obj.states);
-%                 blk_height = 2*n;
-%                 blk_width = length(obj.opt.x0);
-%                 AS2_resF = zeros(blk_height,1);
-%                 AS2_resB = zeros(blk_height,1);
-%                 
-%                 I_F = []; J_F = []; V_F = [];
-%                 I_B = []; J_B = []; V_B = [];
-% 
-%                 % First point anchoring equation
-%                 for i=1:n
-%                     [intvIdx,dir] = obj.minColIdx(obj.map.segment_info,i);
-%                     state_idx = obj.lane.FactorValidIntvs(intvIdx,1);
-%                     R = obj.states{state_idx}.R; P = obj.states{state_idx}.P;
-%                     lane_idx = obj.lane.state_idxs(state_idx);
-%                     seg = obj.map.arc_segments{i};
-%                     initParams = [seg.x0, seg.y0, seg.tau0];
-%                     kappa = seg.kappa; L = seg.L;
-%                     [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = ...
-%                     obj.getAS2Jac(R,P,initParams,kappa,L,lane_idx,dir,'init');
-% 
-%                     AS2_resF(2*i-1:2*i) = anchored_res;
-% 
-%                     idxF = 16 * m + obj.opt.seg_tracker(i);
-%                     idxkF = idxF + 3;
-%                     idxlF = idxF + 3 + length(seg.kappa);
-%                     [I_rF,J_rF,V_rF] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+1:9*(state_idx-1)+3,r_jac);
-%                     [I_pF,J_pF,V_pF] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+7:9*(state_idx-1)+9,p_jac);
-%                     [I_PF,J_PF,V_PF] = sparseFormat(2*i-1:2*i,idxF+1:idxF+3,param_jac);
-%                     % Jacobian for subsegment parameters should
-%                     % be 0 algebraically
-%                     [I_kF,J_kF,V_kF] = sparseFormat(2*i-1:2*i,idxkF+1:idxkF+length(seg.kappa),kappa_jac);
-%                     [I_lF,J_lF,V_lF] = sparseFormat(2*i-1:2*i,idxlF+1:idxlF+length(seg.L),L_jac);
-%                     I_F = [I_F I_rF I_pF I_PF I_kF I_lF];
-%                     J_F = [J_F J_rF J_pF J_PF J_kF J_lF];
-%                     V_F = [V_F V_rF V_pF V_PF V_kF V_lF];
-%                 end
-% 
-%                 % Final point anchoring equation
-%                 for i=1:n
-%                     [intvIdx,dir] = obj.maxColIdx(obj.map.segment_info,i);
-%                     state_idx = obj.lane.FactorValidIntvs(intvIdx,2);
-%                     R = obj.states{state_idx}.R; P = obj.states{state_idx}.P;
-%                     lane_idx = obj.lane.state_idxs(state_idx);
-%                     seg = obj.map.arc_segments{i};
-%                     initParams = [seg.x0, seg.y0, seg.tau0];
-%                     kappa = seg.kappa; L = seg.L;
-%                     [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = ...
-%                     obj.getAS2Jac(R,P,initParams,kappa,L,lane_idx,dir,'last');
-% 
-%                     AS2_resB(2*i-1:2*i) = anchored_res;
-%                     
-%                     idxB = 16 * m + obj.opt.seg_tracker(i);
-%                     idxkB = idxB + 3;
-%                     idxlB = idxB + 3 + length(kappa);
-%                     [I_rB,J_rB,V_rB] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+1:9*(state_idx-1)+3,r_jac);
-%                     [I_pB,J_pB,V_pB] = sparseFormat(2*i-1:2*i,9*(state_idx-1)+7:9*(state_idx-1)+9,p_jac);
-%                     [I_PB,J_PB,V_PB] = sparseFormat(2*i-1:2*i,idxB+1:idxB+3,param_jac);
-%                     [I_kB,J_kB,V_kB] = sparseFormat(2*i-1:2*i,idxkB+1:idxkB+length(kappa),kappa_jac);
-%                     [I_lB,J_lB,V_lB] = sparseFormat(2*i-1:2*i,idxlB+1:idxlB+length(L),L_jac);
-%                     I_B = [I_B I_rB I_pB I_PB I_kB I_lB];
-%                     J_B = [J_B J_rB J_pB J_PB J_kB J_lB];
-%                     V_B = [V_B V_rB V_pB V_PB V_kB V_lB];
-%                 end
-% 
-%                 AS2_res = vertcat(AS2_resF,AS2_resB);
-%                 AS2_jacF = sparse(I_F,J_F,V_F,blk_height,blk_width);
-%                 AS2_jacB = sparse(I_B,J_B,V_B,blk_height,blk_width);
-%                 AS2_jac = vertcat(AS2_jacF,AS2_jacB);
-% 
-%                 obj.opt.AS2_jac = AS2_jac;
-%                 obj.opt.AS2_res = AS2_res;
-
-                numSubSeg = 0;
-                I_size = 0;
-                for i=1:n
-                    % # of Node Points = # of Sub-segments + 1
-                    N = length(obj.map.arc_segments{i}.kappa);
-                    numSubSeg = numSubSeg + N + 1;
-                    I_size = I_size + 2*N^2 + 20 * N + 18;
-                end
-                blk_height = 2 * numSubSeg;
-                blk_width = length(obj.opt.x0);
-                AS2_res = zeros(blk_height,1);
-                I = zeros(1,I_size); J = I; V = I;
-                
-                cnt = 0;
-                jac_cnt = 0;
-                for i=1:n
-                    seg = obj.map.arc_segments{i};
-                    bnds = seg.bnds;
-                    [r,c] = find(obj.map.segment_info == i);
-                    stateIntvs = obj.lane.FactorValidIntvs(c(1):c(end),1:2);
-
-                    % Init Node Point
-                    [stateIdx, dir] = obj.map.findStateIdx(stateIntvs,bnds(1,1),r);
-                    laneIdx = obj.lane.state_idxs(stateIdx);
-                    R = obj.states{stateIdx}.R;
-                    P = obj.states{stateIdx}.P;
-                    initParams = [seg.x0, seg.y0, seg.tau0];
-                    kappa = seg.kappa; L = seg.L;
-
-                    idxInit = 16 * m + obj.opt.seg_tracker(i);
-                    idxKappa = idxInit + 3;
-                    idxL = idxKappa + length(seg.kappa);
-
-                    [r_jac,p_jac,param_jac,~,~,anchored_res] = obj.getAS2Jac(R,P,initParams,kappa,L,laneIdx,dir,0);
-                    
-                    AS2_res(2*cnt+1:2*cnt+2) = anchored_res;
-                    
-                    [I_r,J_r,V_r] = sparseFormat(2*cnt+1:2*cnt+2,9*(stateIdx-1)+1:9*(stateIdx-1)+3,r_jac);
-                    [I_p,J_p,V_p] = sparseFormat(2*cnt+1:2*cnt+2,9*(stateIdx-1)+7:9*(stateIdx-1)+9,p_jac);
-                    [I_P,J_P,V_P] = sparseFormat(2*cnt+1:2*cnt+2,idxInit+1:idxInit+3,param_jac);
-                    
-                    I(jac_cnt+1:jac_cnt+9*2) = [I_r,I_p,I_P];
-                    J(jac_cnt+1:jac_cnt+9*2) = [J_r,J_p,J_P];
-                    V(jac_cnt+1:jac_cnt+9*2) = [V_r,V_p,V_P];
-
-                    cnt = cnt + 1;
-                    jac_cnt = jac_cnt + 9*2;
-
-                    % Remaining Node Points
-                    for j=1:size(bnds,1)
-                        [stateIdx, dir] = obj.map.findStateIdx(stateIntvs,bnds(j,2),r);
-                        laneIdx = obj.lane.state_idxs(stateIdx);
-                        R = obj.states{stateIdx}.R;
-                        P = obj.states{stateIdx}.P;
-                        initParams = [seg.x0, seg.y0, seg.tau0];
-                        kappa = seg.kappa; L = seg.L;
-                        [r_jac,p_jac,param_jac,kappa_jac,L_jac,anchored_res] = obj.getAS2Jac(R,P,initParams,kappa,L,laneIdx,dir,j);
-                        
-                        AS2_res(2*cnt+1:2*cnt+2) = anchored_res;
-                        
-                        [I_r,J_r,V_r] = sparseFormat(2*cnt+1:2*cnt+2,9*(stateIdx-1)+1:9*(stateIdx-1)+3,r_jac);
-                        [I_p,J_p,V_p] = sparseFormat(2*cnt+1:2*cnt+2,9*(stateIdx-1)+7:9*(stateIdx-1)+9,p_jac);
-                        [I_P,J_P,V_P] = sparseFormat(2*cnt+1:2*cnt+2,idxInit+1:idxInit+3,param_jac);
-                        [I_k,J_k,V_k] = sparseFormat(2*cnt+1:2*cnt+2,idxKappa+1:idxKappa+j,kappa_jac);
-                        [I_L,J_L,V_L] = sparseFormat(2*cnt+1:2*cnt+2,idxL+1:idxL+j,L_jac);
-
-                        I(jac_cnt+1:jac_cnt+9*2+2*2*j) = [I_r,I_p,I_P,I_k,I_L];
-                        J(jac_cnt+1:jac_cnt+9*2+2*2*j) = [J_r,J_p,J_P,J_k,J_L];
-                        V(jac_cnt+1:jac_cnt+9*2+2*2*j) = [V_r,V_p,V_P,V_k,V_L];
-
-                        cnt = cnt + 1;
-                        jac_cnt = jac_cnt + 9*2 + 2*2*j;
-                    end
-                end
-
-                AS2_jac = sparse(I,J,V,blk_height,blk_width);
-            end
-
         end
 
         %% Retraction
         function obj = retract(obj,delta,mode)
-            
             n = length(obj.states);
             state_delta = delta(1:9*n);
             bias_ddelta = delta(9*n+1:15*n); % delta of delta value!
@@ -1802,11 +1546,6 @@ classdef optimizer < handle
             if ~strcmp(obj.mode,'basic')
                 wsf_delta = delta(15*n+1:16*n);
                 obj.retractWSF(wsf_delta);
-                
-                if strcmp(obj.mode,'full') || strcmp(obj.mode,'2-phase')
-                    arc_delta = delta(16*n+1:end); % Change this part if more models are added
-                    obj.retractLane(arc_delta);
-                end
             end
             
         end
@@ -1905,31 +1644,72 @@ classdef optimizer < handle
             end            
         end
         
-        %% Lane Retraction
-        function obj = retractLane(obj,arc_delta)
-            % Classify delta values according to segment number
-            cnt = 0;
-            arc_delta_params = {};
+        %% Data Association
+        function obj = DataAssociation2D(obj)
+            % Perform 2D Data Association for previewed lane points
             
-            for i=1:length(obj.map.subseg_cnt)
-                delta_params = struct();
-                num_subseg = obj.map.subseg_cnt(i);
-                subseg_vars = arc_delta(cnt+1:cnt+3+2*num_subseg);
-
-                delta_params.x0 = subseg_vars(1);
-                delta_params.y0 = subseg_vars(2);
-                delta_params.tau0 = subseg_vars(3);
-                
-                kappaL = subseg_vars(4:end)';
-                delta_params.kappa = kappaL(1:num_subseg);
-                delta_params.L = kappaL(num_subseg+1:end);
-                
-                arc_delta_params = [arc_delta_params {delta_params}];
-                cnt = cnt + 3 + 2 * num_subseg;
+            % Create Point Map using 0m previewed points
+            Intvs = obj.lane.FactorValidIntvs;
+            
+            obj.map.PC = {};
+            obj.map.PC_idxs = {};
+            for i=1:max(obj.map.segment_info)
+                obj.map.PC = [obj.map.PC {[]}];
+                obj.map.PC_idxs = [obj.map.PC_idxs {[]}];
             end
-            obj.map.update(obj.states,arc_delta_params);
+
+            for i=1:size(Intvs,1)                
+                lb = Intvs(i,1); ub = Intvs(i,2);
+                LeftIdx = obj.map.segment_info(1,i);
+                RightIdx = obj.map.segment_info(2,i);
+                
+                LeftPC = zeros(2,ub-lb+1);
+                RightPC = zeros(2,ub-lb+1);
+
+                for j=lb:ub
+                    R = obj.states{j}.R;
+                    P = obj.states{j}.P;
+                    rpy = dcm2rpy(R); psi = rpy(3);
+                    R2d = [cos(psi), -sin(psi);sin(psi), cos(psi)];
+                    
+                    l_meas = obj.states{j}.left;
+                    r_meas = obj.states{j}.right;
+
+                    LeftPC(:,j-lb+1) = P(1:2) + R2d * l_meas(1:2,1);
+                    RightPC(:,j-lb+1) = P(1:2) + R2d * r_meas(1:2,1);                    
+                end
+                % Lane Change Intervals are also used for 'resampling'
+                obj.map.PC{LeftIdx} = [obj.map.PC{LeftIdx}, LeftPC];
+                obj.map.PC{RightIdx} = [obj.map.PC{RightIdx}, RightPC];
+                obj.map.PC_idxs{LeftIdx} = [obj.map.PC_idxs{LeftIdx} lb:ub];
+                obj.map.PC_idxs{RightIdx} = [obj.map.PC_idxs{RightIdx} lb:ub];
+            end
+            
+            % Perform 2D Data Association 
+            obj.map.assoc = struct();
+            obj.map.assoc.L = struct();
+            obj.map.assoc.L.lb = zeros(length(obj.states),obj.lane.prev_num);
+            obj.map.assoc.L.ub = zeros(length(obj.states),obj.lane.prev_num);
+            obj.map.assoc.R = struct();
+            obj.map.assoc.R.lb = zeros(length(obj.states),obj.lane.prev_num);
+            obj.map.assoc.R.ub = zeros(length(obj.states),obj.lane.prev_num);
+
+            for i=1:size(Intvs,1)
+                lb = Intvs(i,1); ub = Intvs(i,2);
+                LeftIdx = obj.map.segment_info(1,i);
+                RightIdx = obj.map.segment_info(2,i);
+
+                LeftPC = obj.map.PC{LeftIdx};
+                RightPC = obj.map.PC{RightIdx};
+                
+                for j=lb:ub
+                    for k=1:obj.lane.prev_num
+                        
+                    end
+                end
+            end
         end
-        
+
         %% Matrix Singularity Analysis
         function errorAnalysis(obj)
             % Function for finding location of matrix singularity
@@ -1984,7 +1764,7 @@ classdef optimizer < handle
             obj.opt.LeftCov = zeros(4*length(obj.states),obj.lane.prev_num);
             obj.opt.RightCov = zeros(4*length(obj.states),obj.lane.prev_num);
             
-            disp(['Extracting 2D Lane Point Covariance via Multivariate-Delta Method'])
+            disp('Extracting 2D Lane Point Covariance via Multivariate-Delta Method')
             for i=1:length(obj.states)
                 R_idx = 9*(i-1)+1:9*(i-1)+3;
                 P_idx = 9*(i-1)+7:9*(i-1)+9;
