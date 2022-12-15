@@ -14,7 +14,7 @@ output.ubloxgps.t(79:end) = output.ubloxgps.t(79:end) + delta;
 
 
 %% Data Processing with DaeJeon Dataset
-sc = 1;
+sc = 2;
 if sc == 1
     DSTART = 14800; DEND = 16000;
 elseif sc == 2
@@ -248,8 +248,9 @@ if sc == 1
     lane_.LC_dirs = {'right'};
 elseif sc == 2
     lane_.FactorValidIntvs = [1,length(imu_)+1];
-    lane.LC_dirs = {};
+    lane_.LC_dirs = {};
 end
+
 %% INS + GNSS Fusion 
 % sol = struct();
 % sol.basic = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'basic',options);
@@ -261,9 +262,15 @@ end
 sol = struct();
 sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
 sol.partial.optimize();
-%%
+
 sol.partial.update('2-phase');
 
+
+%% 2-phase Optimization
+sol.partial.optimize();
+
+%% 
+sol.partial.visualize();
 
 %% Processing VINS, DSO
 % Read DSO

@@ -192,34 +192,41 @@ classdef optimizer < handle
                 % 2. 2D/3D Model difference
                 % 
                 % 
-                if strcmp(obj.opt.options.Algorithm,'GN')
-                    obj.GaussNewton();
-                elseif strcmp(obj.opt.options.Algorithm,'LM')
-                    obj.LevenbergMarquardt();
-                elseif strcmp(obj.opt.options.Algorithm,'TR')
-                    obj.TrustRegion();
-                end  
+%                 if strcmp(obj.opt.options.Algorithm,'GN')
+%                     obj.GaussNewton();
+%                 elseif strcmp(obj.opt.options.Algorithm,'LM')
+%                     obj.LevenbergMarquardt();
+%                 elseif strcmp(obj.opt.options.Algorithm,'TR')
+%                     obj.TrustRegion();
+%                 end  
 
-%                 prev_cost = inf;
-%                 curr_cost = 0;
-%                 cost_thres = 1e2; % 
-% 
-%                 while abs(curr_cost - prev_cost) < cost_thres
-%                     prev_cost = curr_cost;
-%                     obj.opt.x0 = zeros(16*n,1);  
-% 
-%                     % Step 2: Full Convergence 
-%                     if strcmp(obj.opt.options.Algorithm,'GN')
-%                         obj.GaussNewton();
-%                     elseif strcmp(obj.opt.options.Algorithm,'LM')
-%                         obj.LevenbergMarquardt();
-%                     elseif strcmp(obj.opt.options.Algorithm,'TR')
-%                         obj.TrustRegion();
-%                     end                    
-%                     
-%                     % Check if final cost is very close to initial cost
-%                     
-%                 end               
+                prev_cost = inf;
+                curr_cost = 0;
+                cost_thres = 1e2; % 
+%                 disp(curr_cost - prev_cost)
+                while true
+                    prev_cost = curr_cost;
+                    obj.opt.x0 = zeros(16*n,1);  
+
+                    t_start = tic;
+                    obj.DataAssociation2D();
+                    t_end = toc(t_start);
+                    disp(['Total elapsed time for data association',num2str(t_end)])
+
+                    % Step 2: Full Convergence 
+                    if strcmp(obj.opt.options.Algorithm,'GN')
+                        obj.GaussNewton();
+                    elseif strcmp(obj.opt.options.Algorithm,'LM')
+                        obj.LevenbergMarquardt();
+                    elseif strcmp(obj.opt.options.Algorithm,'TR')
+                        curr_cost = obj.TrustRegion();
+                    end                    
+                    
+                    % Check if final cost is very close to initial cost
+                    if abs(curr_cost - prev_cost) < cost_thres
+                        break;
+                    end
+                end               
 
                  
             end
@@ -797,7 +804,7 @@ classdef optimizer < handle
         %% INS Propagation 
         function obj = ins(obj)
         % INS Propagation in the world frame using pre-integrated values
-
+        %
         % * Vehicle Body Frame: [x, y, z] = [Forward, Left, Up]
         % * World Frame: [x, y, z] = [East, North, Up]
         % * Camera Frame(Phone): https://source.android.com/docs/core/sensors/sensor-types
@@ -808,6 +815,9 @@ classdef optimizer < handle
         % # R: Body-to-world frame rotational matrix
         % # V: World frame velocity vector
         % # P: World frame position vector (local frame coords, not geodetic)
+        %
+        % Implemented by JinHwan Jeon, 2022
+
             disp('[INS Propagation...]')
             th = pi/2 - pi/180 * obj.gnss.bearing(1);
             R = [cos(th) -sin(th) 0;
@@ -1090,7 +1100,7 @@ classdef optimizer < handle
         end
 
         %% Trust Region Method
-        function obj = TrustRegion(obj)
+        function cost = TrustRegion(obj)
             % Indefinite Gauss-Newton-Powell's Dog-Leg algorithm
             % Implemented "RISE: An Incremental Trust Region Method for Robust Online Sparse Least-Squares Estimation"
             % by David M. Rosen etal
@@ -1128,10 +1138,10 @@ classdef optimizer < handle
             while true
                 A = jac' * jac; b = -jac' * res; 
                 
-%                 t_start = tic;
+                t_start = tic;                
                 h_gn = A \ b; % Gauss-Newton Step
-%                 elapsed_t = toc(t_start);
-%                 disp(['A \ b Solver Elapsed Time: ',num2str(elapsed_t),'s'])
+                elapsed_t = toc(t_start);
+                disp(['A \ b Solver Elapsed Time: ',num2str(elapsed_t),'s'])
 
                 alpha = (b' * b)/(b' * A * b);
                 h_gd = alpha * b; % Gradient Descent Step
@@ -1147,11 +1157,11 @@ classdef optimizer < handle
                 dummy_bias = obj.bias;
                 dummy_imu = obj.imu;
 
-                if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
-                    dummy_arc_segments = obj.map.arc_segments;
-                    dummy_assocL = obj.map.assocL;
-                    dummy_assocR = obj.map.assocR;
-                end
+%                 if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
+%                     dummy_arc_segments = obj.map.arc_segments;
+%                     dummy_assocL = obj.map.assocL;
+%                     dummy_assocR = obj.map.assocR;
+%                 end
                 
                 [res_,jac_] = obj.cost_func(x0);
                 cost = res_' * res_;
@@ -1173,12 +1183,12 @@ classdef optimizer < handle
                     obj.states = dummy_states;                                    
                     obj.bias = dummy_bias;
                     obj.imu = dummy_imu;
-                    if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
-                        obj.map.states = dummy_states;
-                        obj.map.arc_segments = dummy_arc_segments;
-                        obj.map.assocL = dummy_assocL;
-                        obj.map.assocR = dummy_assocR;
-                    end
+%                     if strcmp(obj.mode,'2-phase') || strcmp(obj.mode,'full')
+%                         obj.map.states = dummy_states;
+%                         obj.map.arc_segments = dummy_arc_segments;
+%                         obj.map.assocL = dummy_assocL;
+%                         obj.map.assocR = dummy_assocR;
+%                     end
                     string = 'Rejected';
                     flag = false;
                 end
@@ -1241,15 +1251,31 @@ classdef optimizer < handle
         function [res,jac] = cost_func(obj,x0)
             obj.retract(x0,'normal');
 
-            if strcmp(obj.mode,'2-phase')
-                obj.DataAssociation2D();
-            end
-
+%             if strcmp(obj.mode,'2-phase')
+%                 % Perform data association every iteration
+%                 % May Change!
+%                 t_start = tic;
+%                 obj.DataAssociation2D();
+%                 t_end = toc(t_start);
+%                 disp(['Total elapsed time for data association',num2str(t_end)])
+%             end
+            
+            t_start = tic;
             [Pr_res,Pr_jac] = obj.CreatePrBlock();
             [MM_res,MM_jac] = obj.CreateMMBlock();
             [GNSS_res,GNSS_jac] = obj.CreateGNSSBlock();
             [WSS_res,WSS_jac] = obj.CreateWSSBlock();
-            [LM_res,LM_jac] = obj.CreateLMBlock2D();
+            elapsed_time = toc(t_start);
+            disp(['Total elapsed time for computing Other Jacobians: ',num2str(elapsed_time)])
+
+            if strcmp(obj.mode,'2-phase')
+                t_start = tic;
+                [LM_res,LM_jac] = obj.CreateLMBlock2D();
+                elapsed_time = toc(t_start);
+                disp(['Total elapsed time for computing Lane Jacobians: ',num2str(elapsed_time)])
+            else
+                [LM_res,LM_jac] = obj.CreateLMBlock2D();
+            end
             
             res = vertcat(Pr_res,MM_res,GNSS_res,WSS_res,LM_res);
             jac = vertcat(Pr_jac,MM_jac,GNSS_jac,WSS_jac,LM_jac);   
@@ -1258,6 +1284,11 @@ classdef optimizer < handle
         
         %% Prior Residual and Jacobian
         function [Pr_res,Pr_jac] = CreatePrBlock(obj)
+            % Prior Model
+            % 
+            % Prior for anchoring initial states and wsf values
+            % Implemented by JinHwan Jeon, 2022
+
             n = length(obj.states);
             blk_width = 15*n;
             blk_height = 15;
@@ -1330,6 +1361,14 @@ classdef optimizer < handle
         
         %% IMU Residual and Jacobian
         function [MM_res,MM_jac] = CreateMMBlock(obj)
+            % IMU Measurment Model
+            %
+            % Compare relative motion with preintegrated IMU readings 
+            % Implemented "On-Manifold Preintegration for Real-Time Visual-Inertial Odometry" 
+            % by C. Forster etal,
+            % 
+            % Implemented in MATLAB by JinHwan Jeon, 2022
+
             n = length(obj.states);
             blk_width = 15*n;
 %             blk_height = 15 * (n-1);
@@ -1441,6 +1480,14 @@ classdef optimizer < handle
 
         %% GNSS Residual and Jacobian
         function [GNSS_res,GNSS_jac] = CreateGNSSBlock(obj)
+            % GNSS Measurement Model
+            % 
+            % Supports Loosely Coupled GNSS/INS
+            % Convert LLA format readings to local ENU and compare with
+            % vehicle states
+            % 
+            % Implemented by JinHwan Jeon, 2022
+
             idxs = obj.gnss.state_idxs;
             n = length(idxs);
             
@@ -1477,6 +1524,15 @@ classdef optimizer < handle
         
         %% WSS Residual and Jacobian
         function [WSS_res,WSS_jac] = CreateWSSBlock(obj)
+            % Wheel Speed Sensor Measurement Model
+            %
+            % This model is based on the Vehicle Non-holonomic Constraint
+            % "Vertical and lateral velocity vector at the rear axis is 0".
+            % Based on the 3D Rigid Body Kinematic equation, residual
+            % function was designed.
+            % 
+            % Implemented by JinHwan Jeon, 2022
+
             if strcmp(obj.mode,'basic')
                 WSS_res = [];
                 WSS_jac = [];
@@ -1525,12 +1581,200 @@ classdef optimizer < handle
         
         %% Lane Residual and Jacobian
         function [LM_res,LM_jac] = CreateLMBlock2D(obj)
+            % 2D Lane Factor Model
+            % 
+            % Lane Matching using created '0m Previewed Point Map'
+            %
+            % 
+            %
+            %
+            %
+            % ** Things to check ** 
+            % 1. Correct Data Association
+            % 2. Performing Data Association every iteration is stable?
+            % 3. Any simple implementation error?
+            %
+            %
+            % 
+            % Implemented by JinHwan Jeon, 2022
+
             if ~strcmp(obj.mode,'2-phase') && ~strcmp(obj.mode,'full')
                 LM_res = []; LM_jac = [];
             else
                 n = length(obj.states);
                 blk_width = 16*n;
+                
+                blk_height = nnz(obj.map.assoc.L.lb) + nnz(obj.map.assoc.R.lb);
+                LM_res = zeros(blk_height,1);
+                I = zeros(1,3*2*3*blk_height);
+                J = I; V = I;
+
+                % Sparse Format
+
+                Intvs = obj.lane.FactorValidIntvs;
+                
+                cnt = 1;
+                for i=1:size(Intvs,1)
+                    lb = Intvs(i,1); ub = Intvs(i,2);
+                    for j=lb:ub
+                        lane_idx = obj.lane.state_idxs(j);
+                        for k=1:obj.lane.prev_num
+                            % Compute Residuals only for matched points
+                            if obj.map.assoc.L.lb(j,k) ~= 0 
+                                lbStateIdxL = obj.map.assoc.L.lb(j,k);
+                                ubStateIdxL = obj.map.assoc.L.ub(j,k);
+                                
+                                dir_lbL = obj.map.assoc.L.lb_dir(j,k);
+                                dir_ubL = obj.map.assoc.L.ub_dir(j,k);
+                                
+                                covL = obj.lane.lstd_inter(lane_idx,k)^2;
+                                % Note that the jacobians need to be
+                                % normalized using the covariance data
+                                [resL,jac_lb_R,jac_lb_P,jac_ub_R,jac_ub_P,jac_R,jac_P] = obj.getLaneJac2D(lbStateIdxL,ubStateIdxL,dir_lbL,dir_ubL,j,k,0); 
+                                LM_res(cnt) = InvMahalanobis(resL,covL);
+                                [I1,J1,V1] = sparseFormat(cnt,9*(lbStateIdxL-1)+1:9*(lbStateIdxL-1)+3,InvMahalanobis(jac_lb_R,covL));
+                                [I2,J2,V2] = sparseFormat(cnt,9*(lbStateIdxL-1)+7:9*(lbStateIdxL-1)+9,InvMahalanobis(jac_lb_P,covL));
+                                [I3,J3,V3] = sparseFormat(cnt,9*(ubStateIdxL-1)+1:9*(ubStateIdxL-1)+3,InvMahalanobis(jac_ub_R,covL));
+                                [I4,J4,V4] = sparseFormat(cnt,9*(ubStateIdxL-1)+7:9*(ubStateIdxL-1)+9,InvMahalanobis(jac_ub_P,covL));
+                                [I5,J5,V5] = sparseFormat(cnt,9*(j-1)+1:9*(j-1)+3,InvMahalanobis(jac_R,covL));
+                                [I6,J6,V6] = sparseFormat(cnt,9*(j-1)+7:9*(j-1)+9,InvMahalanobis(jac_P,covL));
+                                
+                                I(18*(cnt-1)+1:18*cnt) = [I1, I2, I3, I4, I5, I6];
+                                J(18*(cnt-1)+1:18*cnt) = [J1, J2, J3, J4, J5, J6];
+                                V(18*(cnt-1)+1:18*cnt) = [V1, V2, V3, V4, V5, V6];
+                                cnt = cnt + 1;
+                            end
+                                
+                            if obj.map.assoc.R.lb(j,k) ~= 0
+                                lbStateIdxR = obj.map.assoc.R.lb(j,k);
+                                ubStateIdxR = obj.map.assoc.R.ub(j,k);
+                                
+                                dir_lbR = obj.map.assoc.R.lb_dir(j,k);
+                                dir_ubR = obj.map.assoc.R.ub_dir(j,k);
+                                
+                                covR = obj.lane.rstd_inter(lane_idx,k)^2;
+                                % Note that the jacobians need to be
+                                % normalized using the covariance data
+                                [resR,jac_lb_R,jac_lb_P,jac_ub_R,jac_ub_P,jac_R,jac_P] = obj.getLaneJac2D(lbStateIdxR,ubStateIdxR,dir_lbR,dir_ubR,j,k,1); 
+                                LM_res(cnt) = InvMahalanobis(resR,covR);
+                                [I1,J1,V1] = sparseFormat(cnt,9*(lbStateIdxR-1)+1:9*(lbStateIdxR-1)+3,InvMahalanobis(jac_lb_R,covR));
+                                [I2,J2,V2] = sparseFormat(cnt,9*(lbStateIdxR-1)+7:9*(lbStateIdxR-1)+9,InvMahalanobis(jac_lb_P,covR));
+                                [I3,J3,V3] = sparseFormat(cnt,9*(ubStateIdxR-1)+1:9*(ubStateIdxR-1)+3,InvMahalanobis(jac_ub_R,covR));
+                                [I4,J4,V4] = sparseFormat(cnt,9*(ubStateIdxR-1)+7:9*(ubStateIdxR-1)+9,InvMahalanobis(jac_ub_P,covR));
+                                [I5,J5,V5] = sparseFormat(cnt,9*(j-1)+1:9*(j-1)+3,InvMahalanobis(jac_R,covR));
+                                [I6,J6,V6] = sparseFormat(cnt,9*(j-1)+7:9*(j-1)+9,InvMahalanobis(jac_P,covR));
+                                
+                                I(18*(cnt-1)+1:18*cnt) = [I1, I2, I3, I4, I5, I6];
+                                J(18*(cnt-1)+1:18*cnt) = [J1, J2, J3, J4, J5, J6];
+                                V(18*(cnt-1)+1:18*cnt) = [V1, V2, V3, V4, V5, V6];
+                                cnt = cnt + 1;
+                            end
+                        end
+                    end
+                end
+                LM_jac = sparse(I,J,V,blk_height,blk_width);
+            end
+        end
+        
+        %% Lane Jacobians
+        function [res,jac_lb_R,jac_lb_P,jac_ub_R,jac_ub_P,jac_R,jac_P] = getLaneJac2D(obj,lbStateIdx,ubStateIdx,dir_lb,dir_ub,j,k,dir)
+            % Numerical Method is used for computing Lane Jacobians due to
+            % the complexity of equation.
+            % Currently, forward method is used.
+            % jac = (f(x + h) - f(x))/h
+            % * Be aware that normalization based on covariance matrix is
+            % not supported in this function --> normalization is done at
+            % 'CreateLMBlock2D' function
+            % 
+            % Implemented by JinHwan Jeon, 2022
+
+            R_lb = obj.states{lbStateIdx}.R; P_lb = obj.states{lbStateIdx}.P;
+            laneIdx_lb = obj.lane.state_idxs(lbStateIdx);            
+            if dir_lb == 0
+                L_lb = obj.lane.l_inter(laneIdx_lb,1);
+            elseif dir_lb == 1
+                L_lb = obj.lane.r_inter(laneIdx_lb,1);
+            end
+
+            R_ub = obj.states{ubStateIdx}.R; P_ub = obj.states{ubStateIdx}.P;
+            laneIdx_ub = obj.lane.state_idxs(ubStateIdx);            
+            if dir_ub == 0
+                L_ub = obj.lane.l_inter(laneIdx_ub,1);
+            elseif dir_lb == 1
+                L_ub = obj.lane.r_inter(laneIdx_ub,1);
+            end
+
+            R_t = obj.states{j}.R; P_t = obj.states{j}.P;
+            laneIdx = obj.lane.state_idxs(j);
+            if dir == 0
+                L_t = obj.lane.l_inter(laneIdx,k);
+            elseif dir == 1
+                L_t = obj.lane.r_inter(laneIdx,k);
+            end
             
+            % Anchored Residual
+            res = obj.getLaneRes2D(R_lb,P_lb,L_lb,R_ub,P_ub,L_ub,R_t,P_t,L_t,k);
+            
+            % Numerical Jacobian Computation
+            % R_lb Perturbation       
+            eps = 1e-6;
+            jac_lb_R = zeros(1,3);
+            for i=1:3
+                R_lb_perturb_vec = zeros(3,1);
+                R_lb_perturb_vec(i) = eps;
+                R_lb_perturbed = R_lb * Exp_map(R_lb_perturb_vec);
+                res_perturbed = obj.getLaneRes2D(R_lb_perturbed,P_lb,L_lb,R_ub,P_ub,L_ub,R_t,P_t,L_t,k);
+                jac_lb_R(i) = (res_perturbed - res)/eps;
+            end
+            
+            % P_lb Perturbation
+            jac_lb_P = zeros(1,3);
+            for i=1:3
+                P_lb_perturb_vec = zeros(3,1);
+                P_lb_perturb_vec(i) = eps;
+                P_lb_perturbed = P_lb + R_lb * P_lb_perturb_vec;
+                res_perturbed = obj.getLaneRes2D(R_lb,P_lb_perturbed,L_lb,R_ub,P_ub,L_ub,R_t,P_t,L_t,k);
+                jac_lb_P(i) = (res_perturbed - res)/eps;
+            end
+
+            % R_ub Perturbation
+            jac_ub_R = zeros(1,3);
+            for i=1:3
+                R_ub_perturb_vec = zeros(3,1);
+                R_ub_perturb_vec(i) = eps;
+                R_ub_perturbed = R_lb * Exp_map(R_ub_perturb_vec);
+                res_perturbed = obj.getLaneRes2D(R_lb,P_lb,L_lb,R_ub_perturbed,P_ub,L_ub,R_t,P_t,L_t,k);
+                jac_ub_R(i) = (res_perturbed - res)/eps;
+            end
+
+            % P_ub Perturbation
+            jac_ub_P = zeros(1,3);
+            for i=1:3
+                P_ub_perturb_vec = zeros(3,1);
+                P_ub_perturb_vec(i) = eps;
+                P_ub_perturbed = P_ub + R_ub * P_ub_perturb_vec;
+                res_perturbed = obj.getLaneRes2D(R_lb,P_lb,L_lb,R_ub,P_ub_perturbed,L_ub,R_t,P_t,L_t,k);
+                jac_ub_P(i) = (res_perturbed - res)/eps;
+            end
+
+            % R_t Perturbation
+            jac_R = zeros(1,3);
+            for i=1:3
+                R_t_perturb_vec = zeros(3,1);
+                R_t_perturb_vec(i) = eps;
+                R_t_perturbed = R_t * Exp_map(R_t_perturb_vec);
+                res_perturbed = obj.getLaneRes2D(R_lb,P_lb,L_lb,R_ub,P_ub,L_ub,R_t_perturbed,P_t,L_t,k);
+                jac_R(i) = (res_perturbed - res)/eps;
+            end
+
+            % P_t Perturbation
+            jac_P = zeros(1,3);
+            for i=1:3
+                P_t_perturb_vec = zeros(3,1);
+                P_t_perturb_vec(i) = eps;
+                P_t_perturbed = P_t + R_t * P_t_perturb_vec;
+                res_perturbed = obj.getLaneRes2D(R_lb,P_lb,L_lb,R_ub,P_ub,L_ub,R_t,P_t_perturbed,L_t,k);
+                jac_P(i) = (res_perturbed - res)/eps;
             end
         end
 
@@ -1653,9 +1897,12 @@ classdef optimizer < handle
             
             obj.map.PC = {};
             obj.map.PC_idxs = {};
-            for i=1:max(obj.map.segment_info)
+            obj.map.PC_dirs = {};
+%             disp(max(obj.map.segment_info))
+            for i=1:max(obj.map.segment_info,[],'all')
                 obj.map.PC = [obj.map.PC {[]}];
                 obj.map.PC_idxs = [obj.map.PC_idxs {[]}];
+                obj.map.PC_dirs = [obj.map.PC_dirs {[]}];
             end
 
             for i=1:size(Intvs,1)                
@@ -1683,6 +1930,10 @@ classdef optimizer < handle
                 obj.map.PC{RightIdx} = [obj.map.PC{RightIdx}, RightPC];
                 obj.map.PC_idxs{LeftIdx} = [obj.map.PC_idxs{LeftIdx} lb:ub];
                 obj.map.PC_idxs{RightIdx} = [obj.map.PC_idxs{RightIdx} lb:ub];
+
+                % 0 for left lane indicator, 1 for right lane indicator
+                obj.map.PC_dirs{LeftIdx} = [obj.map.PC_dirs{LeftIdx} zeros(1,ub-lb+1)];
+                obj.map.PC_dirs{RightIdx} = [obj.map.PC_dirs{RightIdx} ones(1,ub-lb+1)];
             end
             
             % Perform 2D Data Association 
@@ -1690,9 +1941,14 @@ classdef optimizer < handle
             obj.map.assoc.L = struct();
             obj.map.assoc.L.lb = zeros(length(obj.states),obj.lane.prev_num);
             obj.map.assoc.L.ub = zeros(length(obj.states),obj.lane.prev_num);
+            obj.map.assoc.L.lb_dir = zeros(length(obj.states),obj.lane.prev_num);
+            obj.map.assoc.L.ub_dir = zeros(length(obj.states),obj.lane.prev_num);
             obj.map.assoc.R = struct();
             obj.map.assoc.R.lb = zeros(length(obj.states),obj.lane.prev_num);
             obj.map.assoc.R.ub = zeros(length(obj.states),obj.lane.prev_num);
+            obj.map.assoc.R.lb_dir = zeros(length(obj.states),obj.lane.prev_num);
+            obj.map.assoc.R.ub_dir = zeros(length(obj.states),obj.lane.prev_num);
+            lane_std_thres = 1.5;
 
             for i=1:size(Intvs,1)
                 lb = Intvs(i,1); ub = Intvs(i,2);
@@ -1700,11 +1956,60 @@ classdef optimizer < handle
                 RightIdx = obj.map.segment_info(2,i);
 
                 LeftPC = obj.map.PC{LeftIdx};
+                LeftPC_idxs = obj.map.PC_idxs{LeftIdx};
+                LeftPC_dirs = obj.map.PC_dirs{LeftIdx};
                 RightPC = obj.map.PC{RightIdx};
+                RightPC_idxs = obj.map.PC_idxs{RightIdx};
+                RightPC_dirs = obj.map.PC_dirs{RightIdx};
                 
                 for j=lb:ub
-                    for k=1:obj.lane.prev_num
-                        
+                    lane_idx = obj.lane.state_idxs(j);
+                    R = obj.states{j}.R;
+                    P = obj.states{j}.P;
+                    rpy = dcm2rpy(R); psi = rpy(3);
+                    R2d = [cos(psi), -sin(psi);sin(psi), cos(psi)];
+                    
+                    l_meas = obj.states{j}.left;
+                    r_meas = obj.states{j}.right;
+
+                    for k=2:obj.lane.prev_num
+                        % Discard unstable lane measurements
+                        if obj.lane.lstd_inter(lane_idx,k) < lane_std_thres
+                            LeftPoint = P(1:2) + R2d * l_meas(1:2,k);
+                            % Get Lower Bound index for data match
+                            idxL = obj.match2D(LeftPC,LeftPoint); 
+                            if idxL ~= 0
+                                obj.map.assoc.L.lb(j,k) = LeftPC_idxs(idxL);
+                                obj.map.assoc.L.ub(j,k) = LeftPC_idxs(idxL+1);
+                                % 0 for left lane indicator, 1 for right lane indicator
+                                obj.map.assoc.L.lb_dirs(j,k) = LeftPC_dirs(idxL);
+                                obj.map.assoc.L.ub_dirs(j,k) = LeftPC_dirs(idxL+1);
+                            else
+                                obj.map.assoc.L.lb(j,k) = 0;
+                                obj.map.assoc.L.ub(j,k) = 0;
+                                obj.map.assoc.L.lb_dirs(j,k) = 0;
+                                obj.map.assoc.L.ub_dirs(j,k) = 0;
+                            end
+
+                            
+                        end
+                        if obj.lane.rstd_inter(lane_idx,k) < lane_std_thres
+                            RightPoint = P(1:2) + R2d * r_meas(1:2,k);
+                            % Get Lower Bound index for data match
+                            idxR = obj.match2D(RightPC,RightPoint); 
+                            if idxR ~= 0
+                                obj.map.assoc.R.lb(j,k) = RightPC_idxs(idxR);
+                                obj.map.assoc.R.ub(j,k) = RightPC_idxs(idxR+1);    
+                                % 0 for left lane indicator, 1 for right lane indicator
+                                obj.map.assoc.R.lb_dirs(j,k) = RightPC_dirs(idxR);
+                                obj.map.assoc.R.ub_dirs(j,k) = RightPC_dirs(idxR+1);
+                            else
+                                obj.map.assoc.R.lb(j,k) = 0;
+                                obj.map.assoc.R.ub(j,k) = 0;
+                                obj.map.assoc.R.lb_dirs(j,k) = 0;
+                                obj.map.assoc.R.ub_dirs(j,k) = 0;
+                            end
+                        end                        
                     end
                 end
             end
@@ -1726,7 +2031,7 @@ classdef optimizer < handle
             a_diags = diag(obj.opt.info);
             idx = find(a_diags == 0);
             disp(idx)
-%             figure(2); spy(obj.opt.info); 
+            figure(2); spy(obj.opt.info); 
              
             % Check for repeated row in information matrix
             % For faster search, we first trim information matrix for lane
@@ -1846,6 +2151,25 @@ classdef optimizer < handle
             Js = -1/Si^2 * (Ri' * Vi - skew(wi - bgi - bgdi) * L);
         end
         
+        %% Lane Residual
+        function res = getLaneRes2D(R_lb,P_lb,L_lb,R_ub,P_ub,L_ub,R_t,P_t,L_t,k)
+            % Compute lateral residual only (2D)
+            rpy_lb = dcm2rpy(R_lb); rpy_ub = dcm2rpy(R_ub); rpy_t = dcm2rpy(R_t);
+            psi_lb = rpy_lb(3); psi_ub = rpy_ub(3); psi_t = rpy_t(3);
+
+            R2d_lb = [cos(psi_lb), -sin(psi_lb); sin(psi_lb), cos(psi_lb)];
+            R2d_ub = [cos(psi_ub), -sin(psi_ub); sin(psi_ub), cos(psi_ub)];
+            R2d_t = [cos(psi_t), -sin(psi_t); sin(psi_t), cos(psi_t)];
+
+            Q_lb = P_lb(1:2) + R2d_lb * [0;L_lb];
+            Q_ub = P_ub(1:2) + R2d_ub * [0;L_ub];
+            Q_lb_b = R2d_t' * (Q_lb - P_t(1:2));
+            Q_ub_b = R2d_t' * (Q_ub - P_t(1:2));
+
+            t = ([1,0] * Q_ub_b - 10*(k-1))/([1,0] * (Q_ub_b - Q_lb_b));
+            res = [0, 1] * (t * Q_lb_b + (1-t) * Q_ub_b) - L_t;
+        end
+
         %% Compute Dog-Leg Step for Approximate Trust Region Method
         function h_dl = ComputeDogLeg(h_gn,h_gd,tr_rad)
             N_hgn = norm(h_gn); N_hgd = norm(h_gd);
@@ -1924,7 +2248,49 @@ classdef optimizer < handle
                 end
             end
         end
-        
+
+        %% Data Association
+        function idx = match2D(PC,Point)
+            % Performs 2D index match of input Point Cloud and Point
+            % If finds match, lower bound is returned.
+            % Else, 0 is returned
+            D = sqrt((PC(1,:) - Point(1)).^2 + (PC(2,:) - Point(2)).^2);
+            matched_idxs = [];
+            matched_errors = [];
+            for i=1:size(PC,2)-1
+                d1 = D(i); d2 = D(i+1);
+                dPC = sqrt((PC(1,i) - PC(1,i+1))^2 + (PC(2,i) - PC(2,i+1))^2);
+                [~,max_idx] = max([dPC,d1,d2]);
+                if max_idx == 1
+                    % Match Success     
+                    % Since there can be multiple matches, compute vertical 
+                    % distance from line to point for comparison
+                    x1 = PC(1,i); y1 = PC(2,i);
+                    x2 = PC(1,i+1); y2 = PC(2,i+1);
+                    m = (y2-y1)/(x2-x1); n = y1 - m*x1;
+                    xd = Point(1); yd = Point(2);
+                    x_vert = (xd + m*(yd - n))/(m^2 + 1);
+                    y_vert = m * x_vert + n;
+                    match_error = sqrt((xd - x_vert)^2 + (yd - y_vert)^2);
+                    matched_idxs = [matched_idxs, i];
+                    matched_errors = [matched_errors, match_error];                    
+                end
+            end
+
+            % If there are multiple matches, pick the 'best' match with
+            % smallest matching error.
+            %
+            % Perhaps change matching error to normalized error in the
+            % future? (Reliability based) 
+            % --> May be effective for inaccurate measurements
+            if isempty(matched_idxs)
+                idx = 0;                
+            else
+                [~,min_idx] = min(matched_errors);
+                idx = matched_idxs(min_idx);
+            end
+        end
+
         %% Propagate Arc Center Points
         function centerPoints = propCenter(initParams,kappa,L)
             x0 = initParams(1); y0 = initParams(2); heading = initParams(3);
@@ -1980,7 +2346,7 @@ classdef optimizer < handle
                 E(i) = norm(P_ref - P_est);
             end
         end
-
+        
     end
 end
 
