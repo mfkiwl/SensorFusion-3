@@ -14,7 +14,7 @@ output.ubloxgps.t(79:end) = output.ubloxgps.t(79:end) + delta;
 
 
 %% Data Processing with DaeJeon Dataset
-sc = 2;
+sc = 1;
 if sc == 1
     DSTART = 14800; DEND = 16000;
 elseif sc == 2
@@ -234,7 +234,7 @@ options.TR.gamma1 = 0.1;
 options.TR.gamma2 = 2;
 options.TR.thres = 1e-6; % Trust Region Radius Threshold
 
-lane_.prev_num = 6; % Set preview number
+lane_.prev_num = 10; % Set preview number
 lane_.prob_thres = 0.6; % Set lane prob threshold for discarding low-reliability data
 lane_.minL = 5; % Minimum arc length (to prevent singularity)
 
