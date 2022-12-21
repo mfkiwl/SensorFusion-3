@@ -67,6 +67,7 @@ classdef ArcMap < handle
         dummy = struct() % Dummy variable for debugging
         cubicFit = {}
         arcFit = {}
+        clothFit = {}
     end
     
     %% Public Methods
@@ -119,13 +120,13 @@ classdef ArcMap < handle
                 numSubSeg = numSubSeg + length(fit.segments);
                 disp(['Segment ',num2str(i),': ',num2str(length(fit.segments)),' SubSegments'])
                 obj.cubicFit = [obj.cubicFit, {fit}];
-                fit.visualize();
+%                 fit.visualize();
             end
             disp('==============================================')
             disp(['Total number of Segments: ',num2str(length(obj.segments))])
             disp(['Total number of SubSegments: ',num2str(numSubSeg)])
             
-            % Arc Fitting tested with EKF : Too many segments (Deprecated)
+%             % Arc Fitting tested with EKF : Too many segments (Deprecated)
 %             obj.arcFit = {};
 %             % Perform Arc Fitting (Non Continuous)
 %             numSubSeg = 0;
@@ -144,6 +145,27 @@ classdef ArcMap < handle
 %             disp('==============================================')
 %             disp(['Total number of Segments: ',num2str(length(obj.segments))])
 %             disp(['Total number of SubSegments: ',num2str(numSubSeg)])
+
+            % Clothoid Fitting tested with EKF
+            obj.clothFit = {};
+            % Perform Clothoid Fitting (Non Continuous)
+            numSubSeg = 0;
+            disp('  ')
+            disp('[Clothoid Spline Approximation Results]')
+            disp('==============================================')
+            for i=1:length(obj.segments)
+                
+                fit = ClothFitEKF(obj.segments{i},obj.covs{i},i);
+                fit.optimize();
+                numSubSeg = numSubSeg + length(fit.segments);
+                disp(['Segment ',num2str(i),': ',num2str(length(fit.segments)),' SubSegments'])
+                obj.clothFit = [obj.clothFit, {fit}];
+                fit.visualize();
+            end
+            disp('==============================================')
+            disp(['Total number of Segments: ',num2str(length(obj.segments))])
+            disp(['Total number of SubSegments: ',num2str(numSubSeg)])
+
         end    
         
         %% Running Optimization for each Large Segment

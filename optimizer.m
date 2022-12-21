@@ -116,34 +116,34 @@ classdef optimizer < handle
             end
             
             if strcmp(obj.mode,'2-phase')
-%                 disp("[Updating mode to 2-phase, creating Map information...]")
-%                 % Create and initialize Map
-%                 % Initial segmentation and data association is done in this
-%                 % step automatically
-%                 % Complete arc fitting is done in this step
-%                 obj.map = ArcMap(obj.states,obj.lane,obj.lane.prob_thres,obj.opt.LeftCov,obj.opt.RightCov);
+                disp("[Updating mode to 2-phase, creating Map information...]")
+                % Create and initialize Map
+                % Initial segmentation and data association is done in this
+                % step automatically
+                % Complete arc fitting is done in this step
+                obj.map = ArcMap(obj.states,obj.lane,obj.lane.prob_thres,obj.opt.LeftCov,obj.opt.RightCov);
 %                 obj.map.optimize();
-                obj.mode = '2-phase';
-
-                obj.map.segment_info = zeros(2,size(obj.lane.FactorValidIntvs,1));
-
-                LeftSegNum = 1; RightSegNum = 2;
-                obj.map.segment_info(1,1) = LeftSegNum;
-                obj.map.segment_info(2,1) = RightSegNum;
-    
-                for i=1:length(obj.lane.LC_dirs)
-                    if strcmp(obj.lane.LC_dirs{i},'left')
-                        tmp = LeftSegNum;
-                        LeftSegNum = max([LeftSegNum,RightSegNum]) + 1;
-                        RightSegNum = tmp;
-                    elseif strcmp(obj.lane.LC_dirs{i},'right')
-                        tmp = RightSegNum;
-                        RightSegNum = max([LeftSegNum, RightSegNum]) + 1;
-                        LeftSegNum = tmp;
-                    end
-                    obj.map.segment_info(1,i+1) = LeftSegNum;
-                    obj.map.segment_info(2,i+1) = RightSegNum;            
-                end
+%                 obj.mode = '2-phase';
+% 
+%                 obj.map.segment_info = zeros(2,size(obj.lane.FactorValidIntvs,1));
+% 
+%                 LeftSegNum = 1; RightSegNum = 2;
+%                 obj.map.segment_info(1,1) = LeftSegNum;
+%                 obj.map.segment_info(2,1) = RightSegNum;
+%     
+%                 for i=1:length(obj.lane.LC_dirs)
+%                     if strcmp(obj.lane.LC_dirs{i},'left')
+%                         tmp = LeftSegNum;
+%                         LeftSegNum = max([LeftSegNum,RightSegNum]) + 1;
+%                         RightSegNum = tmp;
+%                     elseif strcmp(obj.lane.LC_dirs{i},'right')
+%                         tmp = RightSegNum;
+%                         RightSegNum = max([LeftSegNum, RightSegNum]) + 1;
+%                         LeftSegNum = tmp;
+%                     end
+%                     obj.map.segment_info(1,i+1) = LeftSegNum;
+%                     obj.map.segment_info(2,i+1) = RightSegNum;            
+%                 end
             end           
         end
 
@@ -1243,7 +1243,7 @@ classdef optimizer < handle
             obj.opt.info = jac' * jac;
             disp('[Computing Sparse Inverse of Information Matrix...]')
             obj.opt.cov = sparseinv(obj.opt.info);
-%             obj.extractLaneCov();
+            obj.extractLaneCov();
         end
 
         %% Optimization Cost Function

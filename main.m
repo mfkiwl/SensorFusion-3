@@ -12,10 +12,10 @@ clear; close all; clc;
 % Scenario 5: 2022-08-05--03-45-16 : Convergence Error: almost same as sc4
 % Scenario 6: 2022-08-05--04-19-33 : Challenging Scenario 2 (굳이?)
 
-base_path = 'D:\SJ_Dataset\2022-08-05\';
-scenario2 = '2022-08-05--02-41-03';
-scenario3 = '2022-08-05--02-57-24';
-scenario4 = '2022-08-05--03-13-16';
+% base_path = 'D:\SJ_Dataset\2022-08-05\';
+% scenario2 = '2022-08-05--02-41-03';
+% scenario3 = '2022-08-05--02-57-24';
+% scenario4 = '2022-08-05--03-13-16';
 
 imu1 = load('imu.mat');
 gnss1 = load('gnss.mat');
@@ -23,23 +23,23 @@ lane1 = load('lane.mat');
 can1 = load('can.mat');
 snap1 = load('snap_raw.mat');
 
-imu2 = load(strcat(base_path,scenario2,'\results\imu.mat'));
-gnss2 = load(strcat(base_path,scenario2,'\results\gnss.mat'));
-lane2 = load(strcat(base_path,scenario2,'\results\lane.mat'));
-can2 = load(strcat(base_path,scenario2,'\results\can.mat'));
-snap2 = load(strcat(base_path,scenario2,'\results\snap_raw.mat'));
-
-imu3 = load(strcat(base_path,scenario3,'\results\imu.mat'));
-gnss3 = load(strcat(base_path,scenario3,'\results\gnss.mat'));
-lane3 = load(strcat(base_path,scenario3,'\results\lane.mat'));
-can3 = load(strcat(base_path,scenario3,'\results\can.mat'));
-snap3 = load(strcat(base_path,scenario3,'\results\snap_raw.mat'));
-
-imu4 = load(strcat(base_path,scenario4,'\results\imu.mat'));
-gnss4 = load(strcat(base_path,scenario4,'\results\gnss.mat'));
-lane4 = load(strcat(base_path,scenario4,'\results\lane.mat'));
-can4 = load(strcat(base_path,scenario4,'\results\can.mat'));
-snap4 = load(strcat(base_path,scenario4,'\results\snap_raw.mat'));
+% imu2 = load(strcat(base_path,scenario2,'\results\imu.mat'));
+% gnss2 = load(strcat(base_path,scenario2,'\results\gnss.mat'));
+% lane2 = load(strcat(base_path,scenario2,'\results\lane.mat'));
+% can2 = load(strcat(base_path,scenario2,'\results\can.mat'));
+% snap2 = load(strcat(base_path,scenario2,'\results\snap_raw.mat'));
+% 
+% imu3 = load(strcat(base_path,scenario3,'\results\imu.mat'));
+% gnss3 = load(strcat(base_path,scenario3,'\results\gnss.mat'));
+% lane3 = load(strcat(base_path,scenario3,'\results\lane.mat'));
+% can3 = load(strcat(base_path,scenario3,'\results\can.mat'));
+% snap3 = load(strcat(base_path,scenario3,'\results\snap_raw.mat'));
+% 
+% imu4 = load(strcat(base_path,scenario4,'\results\imu.mat'));
+% gnss4 = load(strcat(base_path,scenario4,'\results\gnss.mat'));
+% lane4 = load(strcat(base_path,scenario4,'\results\lane.mat'));
+% can4 = load(strcat(base_path,scenario4,'\results\can.mat'));
+% snap4 = load(strcat(base_path,scenario4,'\results\snap_raw.mat'));
 
 % imu = load('imu.mat');
 % gnss = load('gnss.mat');
@@ -47,29 +47,29 @@ snap4 = load(strcat(base_path,scenario4,'\results\snap_raw.mat'));
 % can = load('can.mat');
 % snap = load('snap_raw.mat');
 
-gnss_pos = [gnss1.pos(:,1),gnss1.pos(:,2);
-            gnss2.pos(:,1),gnss2.pos(:,2);
-            gnss3.pos(:,1),gnss3.pos(:,2);
-            gnss4.pos(:,1),gnss4.pos(:,2)];
-
-snap_pos = [snap1.lat', snap1.lon';
-            snap2.lat', snap2.lon';
-            snap3.lat', snap3.lon';
-            snap4.lat', snap4.lon'];
+% gnss_pos = [gnss1.pos(:,1),gnss1.pos(:,2);
+%             gnss2.pos(:,1),gnss2.pos(:,2);
+%             gnss3.pos(:,1),gnss3.pos(:,2);
+%             gnss4.pos(:,1),gnss4.pos(:,2)];
+% 
+% snap_pos = [snap1.lat', snap1.lon';
+%             snap2.lat', snap2.lon';
+%             snap3.lat', snap3.lon';
+%             snap4.lat', snap4.lon'];
 
 figure(25);
 % geoplot(snap_pos(:,1),snap_pos(:,2),'r.');
 p1 = geoplot(snap1.lat,snap1.lon,'r--','LineWidth',1.5); hold on; grid on;
-p2 = geoplot(snap2.lat,snap2.lon,'g--','LineWidth',1.5);
-p3 = geoplot(snap3.lat,snap3.lon,'b--','LineWidth',1.5);
-% p4 = geoplot(snap4.lat,snap4.lon,'c--','LineWidth',1.5);
+% p2 = geoplot(snap2.lat,snap2.lon,'g--','LineWidth',1.5);
+% p3 = geoplot(snap3.lat,snap3.lon,'b--','LineWidth',1.5);
+% % p4 = geoplot(snap4.lat,snap4.lon,'c--','LineWidth',1.5);
 
 geobasemap satellite
 title('Full Vehicle Trajectory for Sejong Dataset')
-legend([p1,p2,p3],'Scenario 1','Scenario 2','Scenario 3')
+% legend([p1,p2,p3],'Scenario 1','Scenario 2','Scenario 3')
 
 %% Pre Process raw data
-imu = imu3; gnss = gnss3; lane = lane3; can = can3;
+% imu = imu1; gnss = gnss1; lane = lane1; can = can1;
 dataset = dataprocessor(imu,gnss,can,lane);
 dataset.process();
 % dataset.visualize();

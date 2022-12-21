@@ -466,8 +466,8 @@ classdef dataprocessor < handle
             end
 
             % Scenario 1
-%             LC_intvs = LC_intvs(1:end-1,:);
-%             LC_dirs = LC_dirs(1:end-1);
+            LC_intvs = LC_intvs(1:end-1,:);
+            LC_dirs = LC_dirs(1:end-1);
 
             obj.proc_data.can.LC_intvs = LC_intvs;
             obj.proc_data.lane.LC_dirs = LC_dirs;
@@ -538,16 +538,16 @@ classdef dataprocessor < handle
 %             obj.proc_data.lane.LC_dirs(4) = [];
 
             % Scenario 3
-            % remove 1st right turn
-            laneFactorValidIntvs(1,1) = 1;
-            LC_dirs = LC_dirs(2:end);
-            laneFactorValidIntvs(1,3) = laneFactorValidIntvs(1,2) - laneFactorValidIntvs(1,1) + 1;
-            % remove 4th right turn
-            laneFactorValidIntvs(4,1) = laneFactorValidIntvs(4,1) - 55;
-            laneFactorValidIntvs(4,3) = laneFactorValidIntvs(4,2) - laneFactorValidIntvs(4,1) + 1;
-            % remove last right turn
-            laneFactorValidIntvs(end,1) = laneFactorValidIntvs(end-1,2) + 30;
-            laneFactorValidIntvs(end,3) = laneFactorValidIntvs(end,2) - laneFactorValidIntvs(end,1) + 1;
+%             % remove 1st right turn
+%             laneFactorValidIntvs(1,1) = 1;
+%             LC_dirs = LC_dirs(2:end);
+%             laneFactorValidIntvs(1,3) = laneFactorValidIntvs(1,2) - laneFactorValidIntvs(1,1) + 1;
+%             % remove 4th right turn
+%             laneFactorValidIntvs(4,1) = laneFactorValidIntvs(4,1) - 55;
+%             laneFactorValidIntvs(4,3) = laneFactorValidIntvs(4,2) - laneFactorValidIntvs(4,1) + 1;
+%             % remove last right turn
+%             laneFactorValidIntvs(end,1) = laneFactorValidIntvs(end-1,2) + 30;
+%             laneFactorValidIntvs(end,3) = laneFactorValidIntvs(end,2) - laneFactorValidIntvs(end,1) + 1;
             
             % Scenario 4
             % remove 6th right turn
