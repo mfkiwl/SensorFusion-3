@@ -69,7 +69,7 @@ title('Full Vehicle Trajectory for Sejong Dataset')
 % legend([p1,p2,p3],'Scenario 1','Scenario 2','Scenario 3')
 
 %% Pre Process raw data
-% imu = imu1; gnss = gnss1; lane = lane1; can = can1;
+imu = imu1; gnss = gnss1; lane = lane1; can = can1;
 dataset = dataprocessor(imu,gnss,can,lane);
 dataset.process();
 % dataset.visualize();
