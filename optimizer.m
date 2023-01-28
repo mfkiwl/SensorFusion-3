@@ -714,7 +714,7 @@ classdef optimizer < handle
     %% Private Methods
     methods (Access = private)
         %% Pre-integration using IMU Measurements, given IMU idxs
-        function obj = integrate(obj,idxs)
+         function obj = integrate(obj,idxs)
 %             disp(length(idxs))
             m = length(idxs);
             nbg_cov = obj.covs.imu.GyroscopeNoise;
