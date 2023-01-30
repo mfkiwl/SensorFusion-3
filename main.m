@@ -116,14 +116,7 @@ options.StepThres = 1e-6;
 options.IterThres = 500;
 options.Algorithm = 'TR';
 % GN : Gauss-Newton (Recommended for fast convergence, may not be stable for severely non-linear cases)
-% LM : Levenberg-Marquardt(Not recommended for batch-wise optimization: wrong convergence)
 % TR : Trust-Region (Recommended for stable convergence, but typically much slower than G-N method)
-
-% If selected algorithm is LM, need to define parameters additionally
-options.LM = struct();
-options.LM.eta = 0.1;
-options.LM.Lu = 11; % Lambda Up multiplier
-options.LM.Ld = 5; % Lambda Decrease divider
 
 % If selected algorithm is TR, need to define parameters additionally
 options.TR = struct();
@@ -134,7 +127,8 @@ options.TR.gamma2 = 2;
 options.TR.thres = 1e-6; % Trust Region Radius Threshold
 
 lane_.prev_num = 6; % Set preview number
-lane_.prob_thres = 0.6; % Set lane prob threshold for discarding low-reliability data
+lane_.prob_thres = 0.8; % Set lane prob threshold for discarding low-reliability data
+lane_.std_thres = 0.1; % Set lane std threshold for discarding unstable data
 lane_.minL = 5; % Minimum arc length (to prevent singularity)
 
 %% INS + GNSS Fusion 
@@ -157,6 +151,7 @@ warning('off','MATLAB:nearlySingularMatrix');
 sol = struct();
 % Optimize with INS + GNSS + WSS Fusion first 
 sol.full = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
+%%
 sol.full.optimize();
 % Switch optimization mode to 2-phase and optimize with lane data
 sol.full.opt.options.Algorithm = 'TR';
@@ -238,3 +233,21 @@ sol.full.visualizeHD(T1,T2);
 %% Test
 T3 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A1_NODE.shp");
 T4 = readgeotable("D:\SJ_Dataset\HDMap\Map2\SEC01_BRT_내부간선도로\HDMap_UTMK_타원체고\A2_LINK.shp");
+
+%% 3D Plot for lanes
+N = length(sol.full.states);
+ZeroPreviewLeft = zeros(3,N);
+ZeroPreviewRight = zeros(3,N);
+
+for i=1:N
+    R = sol.full.states{i}.R; P = sol.full.states{i}.P;
+    laneL = sol.full.states{i}.left(:,1);
+    laneR = sol.full.states{i}.right(:,1);
+    ZeroPreviewLeft(:,i) = P + R * laneL;
+    ZeroPreviewRight(:,i) = P + R * laneR;
+end
+
+figure(99);
+plot3(ZeroPreviewLeft(1,:),ZeroPreviewLeft(2,:),ZeroPreviewLeft(3,:),'r.'); grid on; axis equal; hold on;
+plot3(ZeroPreviewRight(1,:),ZeroPreviewRight(2,:),ZeroPreviewRight(3,:),'b.');
+
