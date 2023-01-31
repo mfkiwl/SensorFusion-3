@@ -52,10 +52,16 @@ classdef optimizer < handle
         % ----- For 'partial' or above modes -----
         % * wsf: Wheel Scaling Factor(Ratio for considering effective radius)
         
+        validL
         lambdaL % Left Lane Lambda Array
-        lambdaL_map % Index mapping
+        validL_map
+        I_L
+        J_L
+        validR
         lambdaR % Right Lane Lambda Array
-        lambdaR_map
+        validR_map
+        I_R
+        J_R
 
         bias = {} % bias variables saver
         bgd_thres = 1e-2; % Gyro bias repropagation threshold
@@ -96,9 +102,9 @@ classdef optimizer < handle
             
             % Lambda Array for lane matching
             obj.lambdaL = zeros(n,obj.lane.prev_num);
-            obj.lambdaL_map = zeros(n,obj.lane.prev_num);
+            obj.validL_map = zeros(n,obj.lane.prev_num);
             obj.lambdaR = zeros(n,obj.lane.prev_num);
-            obj.lambdaR_map = zeros(n,obj.lane.prev_num);
+            obj.validR_map = zeros(n,obj.lane.prev_num);
             
             % Initialize Lambda Array
             obj.initializeLambda();
@@ -170,7 +176,7 @@ classdef optimizer < handle
             elseif strcmp(obj.mode,'partial')
                 obj.opt.x0 = zeros(16*n,1);    
             elseif strcmp(obj.mode,'full')
-                obj.opt.x0 = zeros(16*n+nnz(obj.lambdaL)+nnz(obj.lambdaR),1);
+                obj.opt.x0 = zeros(16*n + length(obj.I_L) + length(obj.I_R),1);
             end
 
             if strcmp(obj.opt.options.Algorithm,'GN')
@@ -664,10 +670,9 @@ classdef optimizer < handle
     methods (Access = private)
         %% Initialize Lambda variables
         function obj = initializeLambda(obj)
+            disp('Initializing Lambda Variables')
             % Initialize lambda only for valid lane measurements
             n = length(obj.imu)+1;
-            cntL = 1;
-            cntR = 1;
             for i=1:n-1
                 laneIdx1 = obj.lane.state_idxs(i);
                 laneIdx2 = obj.lane.state_idxs(i+1);
@@ -684,9 +689,10 @@ classdef optimizer < handle
                         % Valid if measurements for Qij, Qijp1, Qip1j have
                         % low enough std value
                         if Qij_std < obj.lane.std_thres && Qijp1_std < obj.lane.std_thres && Qip1j_std < obj.lane.std_thres
-                            obj.lambdaL(i,j) = 0.1;
-                            obj.lambdaL_map(i,j) = cntL;
-                            cntL = cntL + 1;
+                            obj.validL(i,j) = 1;
+                            obj.validL(i,j+1) = 1;
+                            obj.validL(i+1,j) = 1;
+                            obj.lambdaL(i,j) = 1;
                         end                        
                     end                
                 end
@@ -703,12 +709,33 @@ classdef optimizer < handle
                         % Valid if measurements for Qij, Qijp1, Qip1j have
                         % low enough std value
                         if Qij_std < obj.lane.std_thres && Qijp1_std < obj.lane.std_thres && Qip1j_std < obj.lane.std_thres
-                            obj.lambdaR(i,j) = 0.1;
-                            obj.lambdaR_map(i,j) = cntR;
-                            cntR = cntR + 1;
+                            obj.validR(i,j) = 1;
+                            obj.validR(i,j+1) = 1;
+                            obj.validR(i+1,j) = 1;
+                            obj.lambdaR(i,j) = 1;
                         end                        
                     end                
                 end
+            end
+
+            [obj.I_L,obj.J_L] = find(obj.validL);
+            [obj.I_R,obj.J_R] = find(obj.validR);
+
+            % Map linear indices
+            % Left Lane
+            cntL = 1;
+            for i=1:length(obj.I_L)
+                I = obj.I_L(i); J = obj.J_L(i);
+                obj.validL_map(I,J) = cntL;
+                cntL = cntL + 1;
+            end
+
+            % Right Lane
+            cntR = 1;
+            for i=1:length(obj.I_R)
+                I = obj.I_R(i); J = obj.J_R(i);
+                obj.validR_map(I,J) = cntR;
+                cntR = cntR + 1;
             end
         end
 
@@ -1044,8 +1071,8 @@ classdef optimizer < handle
                 dummy_states = obj.states; 
                 dummy_bias = obj.bias;
                 dummy_imu = obj.imu;    
-                dummy_lambdaL = obj.lambdaL;
-                dummy_lambdaR = obj.lambdaR;
+%                 dummy_lambdaL = obj.lambdaL;
+%                 dummy_lambdaR = obj.lambdaR;
                 
                 [res_,jac_] = obj.cost_func(x0);
                 cost = res_' * res_;
@@ -1067,8 +1094,8 @@ classdef optimizer < handle
                     obj.states = dummy_states;                                    
                     obj.bias = dummy_bias;
                     obj.imu = dummy_imu;
-                    obj.lambdaL = dummy_lambdaL;
-                    obj.lambdaR = dummy_lambdaR;
+%                     obj.lambdaL = dummy_lambdaL;
+%                     obj.lambdaR = dummy_lambdaR;
 
                     string = 'Rejected';
                     flag = false;
@@ -1209,11 +1236,53 @@ classdef optimizer < handle
                     I(9*3+6+i) = 15+i;
                     J(9*3+6+i) = 15*n+i;
                     V(9*3+6+i) = InvMahalanobis(1,obj.covs.prior.WSF);
-                end       
+                end      
+                
+                if strcmp(obj.mode,'full')
+                    
+                    % Left Lane
+                    n_L = length(obj.I_L);
+                    Lane_resL = zeros(n_L,1);
+                    % normalize covariance
+                    I_L_ = zeros(1,n_L); J_L_ = I_L_; V_L_ = I_L_;
+                    for i=1:n_L
+                        I_ = obj.I_L(i); J_ = obj.J_L(i);
+                        laneIdx = obj.lane.state_idxs(I_);
+                        cov = obj.lane.lystd(laneIdx,J_)^2; 
+                        
+                        Lane_resL(i) = InvMahalanobis(obj.states{I_}.left(2,J_) - obj.lane.ly(laneIdx,J_),cov);
+                        I_L_(i) = i; J_L_(i) = i; 
+                        V_L_(i) = InvMahalanobis(1,cov);
+                    end
+                    % Right Lane
+                    n_R = length(obj.I_R);
+                    Lane_resR = zeros(n_R,1);
+                    I_R_ = zeros(1,n_R); J_R_ = I_R_; V_R_ = I_R_;
+                    for i=1:n_R
+                        I_ = obj.I_R(i); J_ = obj.J_R(i);
+                        laneIdx = obj.lane.state_idxs(I_);
+                        cov = obj.lane.rystd(laneIdx,J_)^2;
+                        Lane_resR(i) = InvMahalanobis(obj.states{I_}.right(2,J_) - obj.lane.ry(laneIdx,J_),cov);
+                        I_R_(i) = i; J_R_(i) = i; 
+                        V_R_(i) = InvMahalanobis(1,cov);
+                    end
+                    Lane_jacL = horzcat(sparse(n_L,16*n),sparse(I_L_,J_L_,V_L_,n_L,n_L+n_R));
+                    Lane_jacR = horzcat(sparse(n_R,16*n+n_L),sparse(I_R_,J_R_,V_R_,n_R,n_R));
+                    Lane_res = vertcat(Lane_resL,Lane_resR);
+                    Lane_jac = vertcat(Lane_jacL,Lane_jacR);
+                else
+                    Lane_res = []; Lane_jac = [];
+                end
+            else
+                Lane_res = []; Lane_jac = [];
             end   
             
-            Pr_res = [Veh_res; Bias_res; WSS_res];
-            Pr_jac =sparse(I,J,V,blk_height,blk_width);
+            Pr_res = [Veh_res; Bias_res; WSS_res;Lane_res];
+            Pr_jac = sparse(I,J,V,blk_height,blk_width);
+%             disp(size(Pr_jac))
+%             disp(size(Lane_jac))
+            Pr_jac = vertcat(Pr_jac,Lane_jac);
+
         end
         
         %% IMU Residual and Jacobian
@@ -1442,55 +1511,97 @@ classdef optimizer < handle
             if ~strcmp(obj.mode,'full')
                 LM_res = []; LM_jac = [];
             else
-                blk_heightL = 3 * nnz(obj.lambdaL);
-                blk_heightR = 3 * nnz(obj.lambdaR);
+                blk_heightL = nnz(obj.lambdaL);
+                blk_heightR = nnz(obj.lambdaR);
                 blk_width = length(obj.opt.x0);
+                
+                [I_L_,J_L_] = find(obj.lambdaL);
+                [I_R_,J_R_] = find(obj.lambdaR);
 
-                [I_L,J_L] = find(obj.lambdaL);
-                [I_R,J_R] = find(obj.lambdaR);
-
-                n_L = length(I_L); n_R = length(I_R);
+                n_L = length(I_L_); n_R = length(I_R_);
                 LM_resL = zeros(blk_heightL,1); LM_resR = zeros(blk_heightR,1);
+                I_JacL = zeros(15*n_L,1); J_JacL = I_JacL; V_JacL = I_JacL;
+                I_JacR = zeros(15*n_R,1); J_JacR = I_JacR; V_JacR = I_JacR;
                 % Left Lane
                 for i=1:n_L
-                    I = I_L(i); J = J_L(i);
-                    var_idx = obj.lambdaL_map(I,J);
+                    I = I_L_(i); J = J_L_(i);                    
                     lane_idx = obj.lane.state_idxs(I);
 
-                    lambda = obj.lambdaL(I,J);
                     Ri = obj.states{I}.R; Pi = obj.states{I}.P;
-                    Lij = obj.states{I}.left(:,J);
+                    Lij = obj.states{I}.left(:,J); 
+                    var_idx1 = obj.validL_map(I,J);
+
                     Lijp1 = obj.states{I}.left(:,J+1);
+                    var_idx2 = obj.validL_map(I,J+1);
 
                     Rip1 = obj.states{I+1}.R; Pip1 = obj.states{I+1}.P;
                     Lip1j = obj.states{I+1}.left(:,J);
-                    
-                    cov = diag([1e-6,obj.lane.lystd(lane_idx,J)^2,obj.lane.lzstd(lane_idx,J)^2]);
-                    res = Rip1' * (Pi + Ri * Lijp1 - Pip1) + lambda * Rip1' * Ri * (Lij - Lijp1) - Lip1j;
+                    var_idx3 = obj.validL_map(I+1,J);
+
+                    % Get Residual and Jacobian
+                    [res,Jri,Jpi,Jrip1,Jpip1,Jlij,Jlijp1,Jlip1j] = obj.getLaneJac(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,J);
+                    cov = obj.lane.lystd(lane_idx,J)^2;
                     
                     % Residual
-                    LM_resL(3*i-2:3*i) = InvMahalanobis(res,cov);
+                    LM_resL(i) = InvMahalanobis(res,cov);
                     
                     % Jacobian
-                    [I_L1,J_L1,V_L1] = sparseFormat(3*i-2:3*i)
-
+                    [I_L1,J_L1,V_L1] = sparseFormat(i,9*(I-1)+1:9*(I-1)+3,InvMahalanobis(Jri,cov));
+                    [I_L2,J_L2,V_L2] = sparseFormat(i,9*(I-1)+7:9*(I-1)+9,InvMahalanobis(Jpi,cov));
+                    [I_L3,J_L3,V_L3] = sparseFormat(i,9*(I)+1:9*(I)+3,InvMahalanobis(Jrip1,cov));
+                    [I_L4,J_L4,V_L4] = sparseFormat(i,9*(I)+7:9*(I)+9,InvMahalanobis(Jpip1,cov));
+                    [I_L5,J_L5,V_L5] = sparseFormat(i,16*length(obj.states)+var_idx1,InvMahalanobis(Jlij,cov));
+                    [I_L6,J_L6,V_L6] = sparseFormat(i,16*length(obj.states)+var_idx2,InvMahalanobis(Jlijp1,cov));
+                    [I_L7,J_L7,V_L7] = sparseFormat(i,16*length(obj.states)+var_idx3,InvMahalanobis(Jlip1j,cov));
+                    I_JacL(15*(i-1)+1:15*i) = [I_L1,I_L2,I_L3,I_L4,I_L5,I_L6,I_L7];
+                    J_JacL(15*(i-1)+1:15*i) = [J_L1,J_L2,J_L3,J_L4,J_L5,J_L6,J_L7];
+                    V_JacL(15*(i-1)+1:15*i) = [V_L1,V_L2,V_L3,V_L4,V_L5,V_L6,V_L7];
                 end
                 
+                LM_jacL = sparse(I_JacL,J_JacL,V_JacL,blk_heightL,blk_width);
+
                 % Right Lane
                 for i=1:n_R
+                    I = I_R_(i); J = J_R_(i);
+                    lane_idx = obj.lane.state_idxs(I);
+
+                    Ri = obj.states{I}.R; Pi = obj.states{I}.P;
+                    Lij = obj.states{I}.right(:,J);
+                    var_idx1 = obj.validR_map(I,J)+length(obj.I_L);
+
+                    Lijp1 = obj.states{I}.right(:,J+1);
+                    var_idx2 = obj.validR_map(I,J+1)+length(obj.I_L);
+
+                    Rip1 = obj.states{I+1}.R; Pip1 = obj.states{I+1}.P;
+                    Lip1j = obj.states{I+1}.right(:,J);
+                    var_idx3 = obj.validR_map(I+1,J)+length(obj.I_L);
+
+                    % Get Residual and Jacobian
+                    [res,Jri,Jpi,Jrip1,Jpip1,Jlij,Jlijp1,Jlip1j] = obj.getLaneJac(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,J);
+                    cov = obj.lane.rystd(lane_idx,J)^2;
+                    
+                    % Residual
+                    LM_resR(i) = InvMahalanobis(res,cov);
+                    
+                    % Jacobian
+                    [I_R1,J_R1,V_R1] = sparseFormat(i,9*(I-1)+1:9*(I-1)+3,InvMahalanobis(Jri,cov));
+                    [I_R2,J_R2,V_R2] = sparseFormat(i,9*(I-1)+7:9*(I-1)+9,InvMahalanobis(Jpi,cov));
+                    [I_R3,J_R3,V_R3] = sparseFormat(i,9*(I)+1:9*(I)+3,InvMahalanobis(Jrip1,cov));
+                    [I_R4,J_R4,V_R4] = sparseFormat(i,9*(I)+7:9*(I)+9,InvMahalanobis(Jpip1,cov));
+                    [I_R5,J_R5,V_R5] = sparseFormat(i,16*length(obj.states)+var_idx1,InvMahalanobis(Jlij,cov));
+                    [I_R6,J_R6,V_R6] = sparseFormat(i,16*length(obj.states)+var_idx2,InvMahalanobis(Jlijp1,cov));
+                    [I_R7,J_R7,V_R7] = sparseFormat(i,16*length(obj.states)+var_idx3,InvMahalanobis(Jlip1j,cov));
+                    I_JacR(15*(i-1)+1:15*i) = [I_R1,I_R2,I_R3,I_R4,I_R5,I_R6,I_R7];
+                    J_JacR(15*(i-1)+1:15*i) = [J_R1,J_R2,J_R3,J_R4,J_R5,J_R6,J_R7];
+                    V_JacR(15*(i-1)+1:15*i) = [V_R1,V_R2,V_R3,V_R4,V_R5,V_R6,V_R7];
                 end
 
+                LM_jacR = sparse(I_JacR,J_JacR,V_JacR,blk_heightR,blk_width);
 
-
-
-            end
-        end
-        
-        %% Lane Jacobians
-        function [res,jac_lb_R,jac_lb_P,jac_lb_L, ...
-                      jac_ub_R,jac_ub_P,jac_ub_L, ...
-                      jac_R,jac_P,jac_L] = getLaneJac2D(obj,lbStateIdx,ubStateIdx,dir_lb,dir_ub,j,k,dir)
+                LM_res = vertcat(LM_resL,LM_resR);
+                LM_jac = vertcat(LM_jacL,LM_jacR);
             
+            end
         end
 
         %% Retraction
@@ -1610,149 +1721,19 @@ classdef optimizer < handle
         
         %% Lane Retraction
         function obj = retractLane(obj,lane_delta)
-            n = length(obj.states);
-            % add delta values to lambda 
-        end
-
-        %% Data Association
-        function obj = DataAssociation2D(obj)
-            % Perform 2D Data Association for previewed lane points
-            
-            % Create Point Map using 0m previewed points
-            Intvs = obj.lane.FactorValidIntvs;
-            
-            obj.map.PC = {};
-            obj.map.PC_idxs = {};
-            obj.map.PC_dirs = {};
-%             disp(max(obj.map.segment_info))
-            for i=1:max(obj.map.segment_info,[],'all')
-                obj.map.PC = [obj.map.PC {[]}];
-                obj.map.PC_idxs = [obj.map.PC_idxs {[]}];
-                obj.map.PC_dirs = [obj.map.PC_dirs {[]}];
+            % add delta values to lane variables
+            n_L = length(obj.I_L); n_R = length(obj.I_R);
+            deltaL = lane_delta(1:n_L);
+            deltaR = lane_delta(n_L+1:end);
+             
+            for i=1:n_L
+                I = obj.I_L(i); J = obj.J_L(i);
+                obj.states{I}.left(2,J) = obj.states{I}.left(2,J) + deltaL(i);
             end
 
-            for i=1:size(Intvs,1)                
-                lb = Intvs(i,1); ub = Intvs(i,2);
-                LeftIdx = obj.map.segment_info(1,i);
-                RightIdx = obj.map.segment_info(2,i);
-                
-                LeftPC = zeros(2,ub-lb+1);
-                RightPC = zeros(2,ub-lb+1);
-
-                for j=lb:ub
-                    R = obj.states{j}.R;
-                    P = obj.states{j}.P;
-                    rpy = dcm2rpy(R); psi = rpy(3);
-                    R2d = [cos(psi), -sin(psi);sin(psi), cos(psi)];
-                    
-                    l_meas = obj.states{j}.left;
-                    r_meas = obj.states{j}.right;
-
-                    LeftPC(:,j-lb+1) = P(1:2) + R2d * l_meas(1:2,1);
-                    RightPC(:,j-lb+1) = P(1:2) + R2d * r_meas(1:2,1);                    
-                end
-                % Lane Change Intervals are also used for 'resampling'
-                obj.map.PC{LeftIdx} = [obj.map.PC{LeftIdx}, LeftPC];
-                obj.map.PC{RightIdx} = [obj.map.PC{RightIdx}, RightPC];
-                obj.map.PC_idxs{LeftIdx} = [obj.map.PC_idxs{LeftIdx} lb:ub];
-                obj.map.PC_idxs{RightIdx} = [obj.map.PC_idxs{RightIdx} lb:ub];
-
-                % 0 for left lane indicator, 1 for right lane indicator
-                obj.map.PC_dirs{LeftIdx} = [obj.map.PC_dirs{LeftIdx} zeros(1,ub-lb+1)];
-                obj.map.PC_dirs{RightIdx} = [obj.map.PC_dirs{RightIdx} ones(1,ub-lb+1)];
-            end
-            
-            % Perform 2D Data Association 
-            obj.map.assoc = struct();
-            obj.map.assoc.L = struct();
-            obj.map.assoc.L.lb = zeros(length(obj.states),obj.lane.prev_num);
-            obj.map.assoc.L.ub = zeros(length(obj.states),obj.lane.prev_num);
-            obj.map.assoc.L.lb_dir = zeros(length(obj.states),obj.lane.prev_num);
-            obj.map.assoc.L.ub_dir = zeros(length(obj.states),obj.lane.prev_num);
-            obj.map.assoc.L.cnt = zeros(length(obj.states),obj.lane.prev_num);
-            obj.map.assoc.R = struct();
-            obj.map.assoc.R.lb = zeros(length(obj.states),obj.lane.prev_num);
-            obj.map.assoc.R.ub = zeros(length(obj.states),obj.lane.prev_num);
-            obj.map.assoc.R.lb_dir = zeros(length(obj.states),obj.lane.prev_num);
-            obj.map.assoc.R.ub_dir = zeros(length(obj.states),obj.lane.prev_num);
-            obj.map.assoc.R.cnt = zeros(length(obj.states),obj.lane.prev_num);
-            lane_std_thres = 1.5;
-            
-            cntL = 1;
-            cntR = 1;
-            for i=1:size(Intvs,1)
-                lb = Intvs(i,1); ub = Intvs(i,2);
-                LeftIdx = obj.map.segment_info(1,i);
-                RightIdx = obj.map.segment_info(2,i);
-
-                LeftPC = obj.map.PC{LeftIdx};
-                LeftPC_idxs = obj.map.PC_idxs{LeftIdx};
-                LeftPC_dirs = obj.map.PC_dirs{LeftIdx};
-                RightPC = obj.map.PC{RightIdx};
-                RightPC_idxs = obj.map.PC_idxs{RightIdx};
-                RightPC_dirs = obj.map.PC_dirs{RightIdx};
-                
-                for j=lb:ub
-                    lane_idx = obj.lane.state_idxs(j);
-                    R = obj.states{j}.R;
-                    P = obj.states{j}.P;
-                    rpy = dcm2rpy(R); psi = rpy(3);
-                    R2d = [cos(psi), -sin(psi);sin(psi), cos(psi)];
-                    
-                    l_meas = obj.states{j}.left;
-                    r_meas = obj.states{j}.right;
-
-                    for k=1:obj.lane.prev_num
-                        if k == 1
-                            obj.map.assoc.L.cnt(j,k) = cntL;
-                            cntL = cntL + 1;
-                            
-                            obj.map.assoc.R.cnt(j,k) = cntR;
-                            cntR = cntR + 1;
-                        else
-                            % Discard unstable lane measurements
-                            if obj.lane.lstd_inter(lane_idx,k) < lane_std_thres
-                                LeftPoint = P(1:2) + R2d * l_meas(1:2,k);
-                                % Get Lower Bound index for data match
-                                idxL = obj.match2D(LeftPC,LeftPoint); 
-                                if idxL ~= 0
-                                    obj.map.assoc.L.lb(j,k) = LeftPC_idxs(idxL);
-                                    obj.map.assoc.L.ub(j,k) = LeftPC_idxs(idxL+1);
-                                    % 0 for left lane indicator, 1 for right lane indicator
-                                    obj.map.assoc.L.lb_dirs(j,k) = LeftPC_dirs(idxL);
-                                    obj.map.assoc.L.ub_dirs(j,k) = LeftPC_dirs(idxL+1);
-                                    obj.map.assoc.L.cnt(j,k) = cntL;
-                                    cntL = cntL + 1;
-                                else
-                                    obj.map.assoc.L.lb(j,k) = 0;
-                                    obj.map.assoc.L.ub(j,k) = 0;
-                                    obj.map.assoc.L.lb_dirs(j,k) = 0;
-                                    obj.map.assoc.L.ub_dirs(j,k) = 0;
-                                end
-                            end
-
-                            if obj.lane.rstd_inter(lane_idx,k) < lane_std_thres
-                                RightPoint = P(1:2) + R2d * r_meas(1:2,k);
-                                % Get Lower Bound index for data match
-                                idxR = obj.match2D(RightPC,RightPoint); 
-                                if idxR ~= 0
-                                    obj.map.assoc.R.lb(j,k) = RightPC_idxs(idxR);
-                                    obj.map.assoc.R.ub(j,k) = RightPC_idxs(idxR+1);    
-                                    % 0 for left lane indicator, 1 for right lane indicator
-                                    obj.map.assoc.R.lb_dirs(j,k) = RightPC_dirs(idxR);
-                                    obj.map.assoc.R.ub_dirs(j,k) = RightPC_dirs(idxR+1);
-                                    obj.map.assoc.R.cnt(j,k) = cntR;
-                                    cntR = cntR + 1;
-                                else
-                                    obj.map.assoc.R.lb(j,k) = 0;
-                                    obj.map.assoc.R.ub(j,k) = 0;
-                                    obj.map.assoc.R.lb_dirs(j,k) = 0;
-                                    obj.map.assoc.R.ub_dirs(j,k) = 0;
-                                end
-                            end
-                        end                                                
-                    end
-                end
+            for i=1:n_R
+                I = obj.I_R(i); J = obj.J_R(i);
+                obj.states{I}.right(2,J) = obj.states{I}.right(2,J) + deltaR(i);
             end
         end
 
@@ -1822,7 +1803,7 @@ classdef optimizer < handle
 
                 for j=1:obj.lane.prev_num
                     LeftL_cov = diag([0, obj.lane.lystd(lane_idx,j)^2, obj.lane.lzstd(lane_idx,j)^2]);
-                    RightL_cov = diag([0, obj.lane.lystd(lane_idx,j)^2, obj.lane.lzstd(lane_idx,j)^2]);
+                    RightL_cov = diag([0, obj.lane.rystd(lane_idx,j)^2, obj.lane.rzstd(lane_idx,j)^2]);
                     LeftL = obj.states{i}.left(:,j);
                     RightL = obj.states{i}.right(:,j);
 
@@ -1893,19 +1874,88 @@ classdef optimizer < handle
         end
         
         %% Lane Jacobians
-        function [Jri,Jpi,Jrip1,Jpip1,Jlam] = getLaneJac(Ri,Rip1,Pi,Pip1,Lij,Lijp1,lambda)
-            Jri = -Ri' * (skew(Lijp1) + lambda * Ri * skew(Lij - Lijp1));
-            Jpi = Rip1' * Ri;
-            Jrip1 = skew(Rip1' * (Pi + Ri * Lijp1 - Pip1)) + lambda * skew(Rip1' * Ri * (Lij - Lijp1));
-            Jpip1 = -eye(3);
-            Jlam = Rip1' * Ri * (Lij - Lijp1);
-        end
-
-        %% Lane Residual
-        function res = getLaneRes2D(R_lb,P_lb,L_lb,R_ub,P_ub,L_ub,R_t,P_t,L_t,k)
+        function [res_fixed,Jri,Jpi,Jrip1,Jpip1,Jlij,Jlijp1,Jlip1j] = getLaneJac(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,J)
             
-        end
+            res_fixed = getLaneRes(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,J);
+            
+            delta = 1e-12; % Perturbation step
+            % Ri Perturbation
+            Jri = zeros(1,3);
+            for i=1:3
+                perturb_vec = zeros(3,1);
+                perturb_vec(i) = delta;
 
+                Ri_perturbedP = Ri * Exp_map(perturb_vec);
+                Ri_perturbedM = Ri * Exp_map(-perturb_vec);
+                res_perturbedP = getLaneRes(Ri_perturbedP,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,J);
+                res_perturbedM = getLaneRes(Ri_perturbedM,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,J);
+                Jri(i) = (res_perturbedP - res_perturbedM)/(2*delta);
+            end
+            
+            Jpi = zeros(1,3);
+            for i=1:3
+                perturb_vec = zeros(3,1);
+                perturb_vec(i) = delta;
+
+                Pi_perturbedP = Pi + Ri * perturb_vec;
+                Pi_perturbedM = Pi - Ri * perturb_vec;
+                res_perturbedP = getLaneRes(Ri,Rip1,Pi_perturbedP,Pip1,Lij,Lijp1,Lip1j,J);
+                res_perturbedM = getLaneRes(Ri,Rip1,Pi_perturbedM,Pip1,Lij,Lijp1,Lip1j,J);
+                Jpi(i) = (res_perturbedP - res_perturbedM)/(2*delta);
+            end
+
+            Jrip1 = zeros(1,3);
+            for i=1:3
+                perturb_vec = zeros(3,1);
+                perturb_vec(i) = delta;
+
+                Rip1_perturbedP = Rip1 * Exp_map(perturb_vec);
+                Rip1_perturbedM = Rip1 * Exp_map(-perturb_vec);
+                res_perturbedP = getLaneRes(Ri,Rip1_perturbedP,Pi,Pip1,Lij,Lijp1,Lip1j,J);
+                res_perturbedM = getLaneRes(Ri,Rip1_perturbedM,Pi,Pip1,Lij,Lijp1,Lip1j,J);
+                Jrip1(i) = (res_perturbedP - res_perturbedM)/(2*delta);
+            end
+            
+            Jpip1 = zeros(1,3);
+            for i=1:3
+                perturb_vec = zeros(3,1);
+                perturb_vec(i) = delta;
+
+                Pip1_perturbedP = Pip1 + Rip1 * perturb_vec;
+                Pip1_perturbedM = Pip1 - Rip1 * perturb_vec;
+                res_perturbedP = getLaneRes(Ri,Rip1,Pi,Pip1_perturbedP,Lij,Lijp1,Lip1j,J);
+                res_perturbedM = getLaneRes(Ri,Rip1,Pi,Pip1_perturbedM,Lij,Lijp1,Lip1j,J);
+                Jpip1(i) = (res_perturbedP - res_perturbedM)/(2*delta);
+            end
+
+            perturb_vec = delta;
+            Lij_perturbedP = Lij + [0;perturb_vec;0];
+            Lij_perturbedM = Lij - [0;perturb_vec;0];
+            res_perturbedP = getLaneRes(Ri,Rip1,Pi,Pip1,Lij_perturbedP,Lijp1,Lip1j,J);
+            res_perturbedM = getLaneRes(Ri,Rip1,Pi,Pip1,Lij_perturbedM,Lijp1,Lip1j,J);
+            Jlij = (res_perturbedP - res_perturbedM)/(2*delta);
+
+            perturb_vec = delta;
+            Lijp1_perturbedP = Lijp1 + [0;perturb_vec;0];
+            Lijp1_perturbedM = Lijp1 - [0;perturb_vec;0];
+            res_perturbedP = getLaneRes(Ri,Rip1,Pi,Pip1,Lij,Lijp1_perturbedP,Lip1j,J);
+            res_perturbedM = getLaneRes(Ri,Rip1,Pi,Pip1,Lij,Lijp1_perturbedM,Lip1j,J);
+            Jlijp1 = (res_perturbedP - res_perturbedM)/(2*delta);
+
+            perturb_vec = delta;
+            Lip1j_perturbedP = Lip1j + [0;perturb_vec;0];
+            Lip1j_perturbedM = Lip1j - [0;perturb_vec;0];
+            res_perturbedP = getLaneRes(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j_perturbedP,J);
+            res_perturbedM = getLaneRes(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j_perturbedM,J);
+            Jlip1j = (res_perturbedP - res_perturbedM)/(2*delta);
+
+%             Jri = (-Ri' * (skew(Lijp1) + lambda * Ri * skew(Lij - Lijp1)));
+%             Jpi = Rip1' * Ri;
+%             Jrip1 = (skew(Rip1' * (Pi + Ri * Lijp1 - Pip1)) + lambda * skew(Rip1' * Ri * (Lij - Lijp1)));
+%             Jpip1 = -eye(3);
+%             Jlam = Rip1' * Ri * (Lij - Lijp1);
+        end
+        
         %% Compute Dog-Leg Step for Approximate Trust Region Method
         function h_dl = ComputeDogLeg(h_gn,h_gd,tr_rad)
             N_hgn = norm(h_gn); N_hgd = norm(h_gd);
@@ -2066,3 +2116,22 @@ classdef optimizer < handle
     end
 end
 
+%% Lane Residuals
+function res = getLaneRes(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,J)
+%     rpy_i = dcm2rpy(Ri); psi_i = rpy_i(3);
+%     rpy_ip1 = dcm2rpy(Rip1); psi_ip1 = rpy_ip1(3);
+%     R2di = [cos(psi_i), -sin(psi_i);sin(psi_i), cos(psi_i)];
+%     R2dip1 = [cos(psi_ip1), -sin(psi_ip1);sin(psi_ip1), cos(psi_ip1)];
+%     
+%     P2di = Pi(1:2); P2dip1 = Pip1(1:2);
+%     L2dij = Lij(1:2); L2dijp1 = Lijp1(1:2); 
+%     L2dip1j = Lip1j(2); % 1d variable
+
+    Qijb = Rip1' * (Pi + Ri * Lij - (Rip1 * [10*(J-1);0;0] + Pip1));
+    Qijp1b = Rip1' * (Pi + Ri * Lijp1 - (Rip1 * [10*(J-1);0;0] + Pip1));
+
+    x1 = Qijb(1); y1 = Qijb(2);
+    x2 = Qijp1b(1); y2 = Qijp1b(2);
+
+    res = (x2*y1-x1*y2)/(x2-x1) - Lip1j(2);
+end
