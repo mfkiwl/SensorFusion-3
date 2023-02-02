@@ -14,7 +14,7 @@ output.ubloxgps.t(79:end) = output.ubloxgps.t(79:end) + delta;
 
 
 %% Data Processing with DaeJeon Dataset
-sc = 1;
+sc = 2;
 if sc == 1
     DSTART = 14800; DEND = 16000;
 elseif sc == 2
@@ -179,6 +179,15 @@ lane_.lz = zeros(size(lane_.l_inter,1),11);
 lane_.ry = lane_.r_inter;
 lane_.rz = zeros(size(lane_.r_inter,1),11);
 
+lane_.prob = zeros(size(lane_.l_inter,1),4);
+lane_.prob(:,2) = lane_.lprob;
+lane_.prob(:,3) = lane_.rprob;
+
+lane_.lystd = lane_.lstd_inter;
+lane_.rystd = lane_.rstd_inter;
+lane_.lzstd = 1.5 * ones(size(lane_.lstd_inter));
+lane_.rzstd = 1.5 * ones(size(lane_.lstd_inter));
+
 snap = ref.pos(1,:);
 % snap = [];
 t_ = state_t - base_t;
@@ -214,7 +223,7 @@ covs_.wss = 1e-5 * eye(3);
 options = struct();
 options.CostThres = 1e-6;
 options.StepThres = 1e-6;
-options.IterThres = 500;
+options.IterThres = 30;
 options.Algorithm = 'TR';
 % GN : Gauss-Newton (Recommended for fast convergence, may not be stable for severely non-linear cases)
 % LM : Levenberg-Marquardt(Not recommended for batch-wise optimization: wrong convergence)
@@ -235,7 +244,8 @@ options.TR.gamma2 = 2;
 options.TR.thres = 1e-6; % Trust Region Radius Threshold
 
 lane_.prev_num = 10; % Set preview number
-lane_.prob_thres = 0.6; % Set lane prob threshold for discarding low-reliability data
+lane_.prob_thres = 0.8; % Set lane prob threshold for discarding low-reliability data
+lane_.std_thres = 1;
 lane_.minL = 5; % Minimum arc length (to prevent singularity)
 
 %% Possible Lane Change Intervals
@@ -260,14 +270,14 @@ end
 
 %% INS + GNSS + WSS Fusion
 sol = struct();
-sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
+sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'full',options);
 sol.partial.optimize();
 
-sol.partial.update('2-phase');
+% sol.partial.update('2-phase');
 
 
 %% 2-phase Optimization
-sol.partial.optimize();
+% sol.partial.optimize();
 
 %% 
 sol.partial.visualize();

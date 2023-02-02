@@ -113,7 +113,7 @@ covs_.wss = 3e-2 * eye(3);
 options = struct();
 options.CostThres = 1e-6;
 options.StepThres = 1e-6;
-options.IterThres = 300;
+options.IterThres = 100;
 options.Algorithm = 'TR';
 % GN : Gauss-Newton (Recommended for fast convergence, may not be stable for severely non-linear cases)
 % TR : Trust-Region (Recommended for stable convergence, but typically much slower than G-N method)
@@ -126,9 +126,9 @@ options.TR.gamma1 = 0.1;
 options.TR.gamma2 = 2;
 options.TR.thres = 1e-6; % Trust Region Radius Threshold
 
-lane_.prev_num = 3; % Set preview number
+lane_.prev_num = 10; % Set preview number
 lane_.prob_thres = 0.8; % Set lane prob threshold for discarding low-reliability data
-lane_.std_thres = 0.1; % Set lane std threshold for discarding unstable data
+lane_.std_thres = 1; % Set lane std threshold for discarding unstable data
 lane_.minL = 5; % Minimum arc length (to prevent singularity)
 
 %% INS + GNSS Fusion 
