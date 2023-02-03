@@ -203,6 +203,9 @@ classdef optimizer < handle
             % * If current state is valid, extract all valid points
             PC = {[],[]};
             n = size(obj.lane.FactorValidIntvs);
+            left_idc = 1;
+            right_idc = 2;
+            
             for i=1:n
                 lb = obj.lane.FactorValidIntvs(i,1);
                 ub = obj.lane.FactorValidIntvs(i,2);
@@ -210,6 +213,9 @@ classdef optimizer < handle
                 for j=lb:ub
                     
                 end
+
+                % Increase or decrease the left/right indicators when lane
+                % change is detected
             end
 
         end
