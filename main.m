@@ -95,7 +95,7 @@ covs_.prior.Bg = diag([1e-3, 1e-3, 1e-3]);
 covs_.prior.Ba = diag([0.1^2, 0.1^2, 0.1^2]);
 covs_.prior.WSF = 1e-4;
 % covs_.prior.Params = diag([1e-4,1e-6,1e-4]);
-covs_.prior.Params = 1e-5;
+covs_.prior.Params = diag([0.1^2,1e-6,0.1^2]);
 
 % IMU Accel, Gyro noise and bias randomwalk, ScaleFactorNoise
 covs_.imu = struct();
@@ -106,8 +106,8 @@ covs_.imu.AccelerometerNoise = 5/3 * 1e-3 * eye(3);
 covs_.imu.ScaleFactorNoise = 1e-4;
 
 % WSS 
-% covs_.wss = diag([1e-2,1e-5,1e-5]);
-covs_.wss = 3e-2 * eye(3);
+covs_.wss = diag([1e-2,1e-4,1e-4]);
+% covs_.wss = 3e-2 * eye(3);
 
 % Optimization Options
 options = struct();
@@ -137,54 +137,21 @@ lane_.minL = 5; % Minimum arc length (to prevent singularity)
 % sol.basic.optimize();
 % sol.basic.visualize();
 
-%% INS + GNSS + WSS Fusion
+%% INS + GNSS + WSS Fusion (Not Recommended)
 % sol = struct();
-% sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial',options);
+% sol.partial = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial1',options);
 % sol.partial.optimize();
 % sol.partial.visualize();
 
-%% INS + GNSS + WSS + Lane Fusion
+%% INS + GNSS + Lane Fusion (Recommended)
 
 % To find warning id of most recent warning, use 'warning('query','last')'
-warning('off','MATLAB:nearlySingularMatrix');
+% warning('off','MATLAB:nearlySingularMatrix');
  
 sol = struct();
 % Optimize with INS + GNSS + WSS Fusion first 
-sol.full = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'full',options);
+sol.full = optimizer(imu_,gnss_,lane_,can_,snap,bias_,t_,covs_,'partial2',options);
 sol.full.optimize();
-%%
-% Switch optimization mode to 2-phase and optimize with lane data
-sol.full.mode = 'full';
-sol.full.optimize();
-
-
-
-%%
-sol.full.update('2-phase'); % Update mode to 2-phase
-
-
-%%
-sol.full.map.dummyF();
-% initArcParams = sol.full.map.arc_segments; % save data
-
-%%
-sol.full.map.dummy2();
-%%
-sol.full.map.dummy3();
-
-
-%%
-
-% To test phase 2 optimization, use saved parameters from phase 1
-% sol.full.map.arc_segments = load('initArcParams.mat');
-
-sol.full.optimize();
-
-%%
-% sol.full.map.validate();
-
-
-sol.full.plotConfEllipse(0.9);
 
 %%
 sol.full.visualize();

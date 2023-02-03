@@ -6,10 +6,11 @@ classdef optimizer < handle
 %
 %   [imu, gnss, lane, can, imu_bias, t] : Pre-processed data
 % 
-%   [Mode] : 'basic', 'partial', 'full'
+%   [Mode] : 'basic', 'partial1', 'partial2', 'full'
 %   * Basic: INS + GNSS Fusion
-%   * Partial: INS + GNSS + WSS Fusion
-%   * Full: INS + GNSS + WSS + Lane Detection Fusion 
+%   * Partial1: INS + GNSS + WSS Fusion
+%   * Partial2: INS + GNSS + Lane Fusion
+%   * Full: INS + GNSS + WSS + Lane Fusion 
 % 
 %   [Options] : struct variable containing NLS optimization options
 %   * options.CostThres: Cost difference threshold
@@ -19,7 +20,7 @@ classdef optimizer < handle
 %   ** GN : no guarantee of convergence to local minima
 %   When using TR as solver algorithm, need to define parameters.
 %   - TR parameters at 'main.m' should work fine
-%   - There are cases where TR algorithm converges to a weird local optimal
+%   - There are cases where TR algorithm converges to a weird local optima
 %     --> Tune model covariance values 
 % 
 %   [Methods] : using OPTIMIZER 
@@ -69,7 +70,6 @@ classdef optimizer < handle
         
 %         map % map variable for 'full' or '2-phase' mode
         opt = struct() % Optimized results
-        counter = 1
     end
     
     %% Public Methods
@@ -99,7 +99,7 @@ classdef optimizer < handle
             end
             
             % Vehicle Lever Arm Vector
-            obj.params =  [1.5; 0; 1]; 
+            obj.params =  [1.5; 0; 0.6]; 
             
             % Lambda Array for lane matching
             obj.lambdaL = zeros(n,obj.lane.prev_num);
@@ -107,8 +107,8 @@ classdef optimizer < handle
             obj.lambdaR = zeros(n,obj.lane.prev_num);
             obj.validR_map = zeros(n,obj.lane.prev_num);
             
-            % Initialize Lambda Array
-            obj.initializeLambda();
+            % Validate Lane Measurement based on std value and probability
+            obj.validateLane();
 
             % Perform Pre-integration
             obj.integrate(1:n-1);
@@ -158,7 +158,6 @@ classdef optimizer < handle
 
         %% Optimize
         function obj = optimize(obj)
-            
             % Solve Sparse Nonlinear Least Squares in Batch Manner                     
 
             disp('[Optimization Starts...]')
@@ -169,15 +168,18 @@ classdef optimizer < handle
             % Run optimization depending on algorithm options
             % [Basic Mode]: INS + GNSS Fusion
             % [Partial Mode]: INS + GNSS + WSS Fusion
-            % [Partial Mode2]: INS + GNSS + Lane Fusion --> To be done
+            % [Partial Mode2]: INS + GNSS + Lane Fusion
             % [Full Mode]: INS + GNSS + WSS + Lane Fusion
             
             if strcmp(obj.mode,'basic')
                 obj.opt.x0 = zeros(15*n,1);
-            elseif strcmp(obj.mode,'partial')
-                obj.opt.x0 = zeros(16*n,1);    
+            elseif strcmp(obj.mode,'partial1')
+                obj.opt.x0 = zeros(16*n+3,1);   
+            elseif strcmp(obj.mode,'partial2')
+                obj.opt.x0 = zeros(15*n + length(obj.I_L) + length(obj.I_R),1);  
             elseif strcmp(obj.mode,'full')
-                obj.opt.x0 = zeros(15*n + length(obj.I_L) + length(obj.I_R),1); % length(obj.I_L) + length(obj.I_R)
+                % Test if lever arm vector can be estimated
+                obj.opt.x0 = zeros(16*n + length(obj.I_L) + length(obj.I_R) + 3,1); 
             end
 
             if strcmp(obj.opt.options.Algorithm,'GN')
@@ -669,10 +671,11 @@ classdef optimizer < handle
     
     %% Private Methods
     methods (Access = private)
-        %% Initialize Lambda variables
-        function obj = initializeLambda(obj)
-            disp('Initializing Lambda Variables')
+        %% Label Valid Lane Indices
+        function obj = validateLane(obj)
             % Initialize lambda only for valid lane measurements
+            % All labeled lane variables are to be optimized for 'partial2'
+            % or 'full' modes.
             n = length(obj.imu)+1;
             for i=1:n-1
 %                 disp(i)
@@ -1068,8 +1071,7 @@ classdef optimizer < handle
                 dummy_imu = obj.imu;    
 %                 dummy_lambdaL = obj.lambdaL;
 %                 dummy_lambdaR = obj.lambdaR;
-                
-                obj.counter = obj.counter + 1;
+                dummy_params = obj.params;
                 [res_,jac_] = obj.cost_func(x0);
                 
                 cost = res_' * res_;
@@ -1091,6 +1093,7 @@ classdef optimizer < handle
                     obj.states = dummy_states;                                    
                     obj.bias = dummy_bias;
                     obj.imu = dummy_imu;
+                    obj.params = dummy_params;
 %                     obj.lambdaL = dummy_lambdaL;
 %                     obj.lambdaR = dummy_lambdaR;
 
@@ -1162,8 +1165,7 @@ classdef optimizer < handle
             [Pr_res,Pr_jac] = obj.CreatePrBlock();
             [MM_res,MM_jac] = obj.CreateMMBlock();
             [GNSS_res,GNSS_jac] = obj.CreateGNSSBlock();
-%             [WSS_res,WSS_jac] = obj.CreateWSSBlock();
-            WSS_res = []; WSS_jac = [];
+            [WSS_res,WSS_jac] = obj.CreateWSSBlock();
             [LM_res,LM_jac] = obj.CreateLMBlock();
             
             res = vertcat(Pr_res,MM_res,GNSS_res,WSS_res,LM_res);
@@ -1179,20 +1181,13 @@ classdef optimizer < handle
             % Implemented by JinHwan Jeon, 2022
 
             n = length(obj.states);
-            blk_width = 15*n;
+            blk_width = length(obj.opt.x0);
             blk_height = 15;
             adder = 0;
 
-            if strcmp(obj.mode,'partial')
-                blk_width = blk_width + n;
+            if strcmp(obj.mode,'partial1') || strcmp(obj.mode,'full')
                 adder = n ;                
-                blk_height = blk_height + n;
-            elseif strcmp(obj.mode,'full')
-                % Add prev_num states
-%                 blk_height = blk_height + n; % fix
-%                 adder = n;
-                adder = 0;
-                blk_width = length(obj.opt.x0);
+                blk_height = blk_height + n;                
             end
 
             Veh_cov = blkdiag(obj.covs.prior.R,obj.covs.prior.V,obj.covs.prior.P);
@@ -1200,7 +1195,7 @@ classdef optimizer < handle
             
             I = zeros(1,9*3 + 6 + adder); J = I; V = I;
 
-            % Vehicle Prior
+            % Vehicle States Prior
             R_init = obj.opt.init_state.R;
             V_init = obj.opt.init_state.V;
             P_init = obj.opt.init_state.P;
@@ -1233,68 +1228,74 @@ classdef optimizer < handle
             J(9*3+1:9*3+6) = 9*n+1:9*n+6;
             V(9*3+1:9*3+6) = [V_1b V_2b];
             
-            WSS_res = []; 
-            if ~strcmp(obj.mode,'basic')
-                if strcmp(obj.mode,'partial')
-                    % WSF Prior
-                    WSS_res = zeros(n,1);
-                    for i=1:n
-                        WSF = obj.states{i}.WSF;
-                        WSS_res(i) = InvMahalanobis(WSF - 1,obj.covs.prior.WSF);
-                        I(9*3+6+i) = 15+i;
-                        J(9*3+6+i) = 15*n+i;
-                        V(9*3+6+i) = InvMahalanobis(1,obj.covs.prior.WSF);
-                    end   
-                else
-                    WSS_res = []; 
+            % Wheel Scaling Factor Prior
+            if ~strcmp(obj.mode,'partial2')
+                WSS_res = zeros(n,1);
+                for i=1:n
+                    WSF = obj.states{i}.WSF;
+                    WSS_res(i) = InvMahalanobis(WSF - 1,obj.covs.prior.WSF);
+                    I(9*3+6+i) = 15+i;
+                    J(9*3+6+i) = 15*n+i;
+                    V(9*3+6+i) = InvMahalanobis(1,obj.covs.prior.WSF);
                 end
-                   
-%                 Lane_res = []; Lane_jac = [];
-                if strcmp(obj.mode,'full')
+                
+                % Lever arm prior
+                lin_point = [1.5;0;0.7];
+                cov = obj.covs.prior.Params;
+                Lev_res = InvMahalanobis(obj.params - lin_point,cov);
+                I_Lev = [1,2,3]; J_Lev = [1,2,3]; V_Lev = diag(InvMahalanobis(eye(3),cov))';
+
+                if strcmp(obj.mode,'partial1')
+                    Lev_jac = horzcat(sparse(3,16*n),sparse(I_Lev,J_Lev,V_Lev,3,3));
+                elseif strcmp(obj.mode,'full')
+                    Lev_jac = horzcat(sparse(3,16*n+length(obj.I_L)+length(obj.I_R)),sparse(I_Lev,J_Lev,V_Lev,3,3));
+                end                
+            else
+                WSS_res = []; Lev_res = []; Lev_jac = [];
+            end
+            
+            % Lane Measurement Prior
+            if ~strcmp(obj.mode,'partial1')
+                if strcmp(obj.mode,'partial2')
+                    mul = 15; adder2 = 0;
+                elseif strcmp(obj.mode,'full')
+                    mul = 16; adder2 = 3;
+                end
+                % Left Lane
+                n_L = length(obj.I_L);
+                Lane_resL = zeros(n_L,1);
+                % normalize covariance
+                I_L_ = zeros(1,n_L); J_L_ = I_L_; V_L_ = I_L_;
+                for i=1:n_L
+                    I_ = obj.I_L(i); J_ = obj.J_L(i);
+                    laneIdx = obj.lane.state_idxs(I_);
+                    cov = obj.lane.lystd(laneIdx,J_)^2; 
                     
-                    % Left Lane
-                    n_L = length(obj.I_L);
-                    Lane_resL = zeros(n_L,1);
-                    % normalize covariance
-                    I_L_ = zeros(1,n_L); J_L_ = I_L_; V_L_ = I_L_;
-                    for i=1:n_L
-                        I_ = obj.I_L(i); J_ = obj.J_L(i);
-                        laneIdx = obj.lane.state_idxs(I_);
-                        cov = obj.lane.lystd(laneIdx,J_)^2; 
-                        
-                        Lane_resL(i) = InvMahalanobis(obj.states{I_}.left(2,J_) - obj.lane.ly(laneIdx,J_),cov);
-                        I_L_(i) = i; J_L_(i) = i; 
-                        V_L_(i) = InvMahalanobis(1,cov);
-                    end
-                    % Right Lane
-                    n_R = length(obj.I_R);
-                    Lane_resR = zeros(n_R,1);
-                    I_R_ = zeros(1,n_R); J_R_ = I_R_; V_R_ = I_R_;
-                    for i=1:n_R
-                        I_ = obj.I_R(i); J_ = obj.J_R(i);
-                        laneIdx = obj.lane.state_idxs(I_);
-                        cov = obj.lane.rystd(laneIdx,J_)^2;
-                        Lane_resR(i) = InvMahalanobis(obj.states{I_}.right(2,J_) - obj.lane.ry(laneIdx,J_),cov);
-                        I_R_(i) = i; J_R_(i) = i; 
-                        V_R_(i) = InvMahalanobis(1,cov);
-                    end
-                    Lane_jacL = horzcat(sparse(n_L,15*n),sparse(I_L_,J_L_,V_L_,n_L,n_L+n_R));
-                    Lane_jacR = horzcat(sparse(n_R,15*n+n_L),sparse(I_R_,J_R_,V_R_,n_R,n_R));
-                    Lane_res = vertcat(Lane_resL,Lane_resR);
-                    Lane_jac = vertcat(Lane_jacL,Lane_jacR);
-                else
-                    Lane_res = []; Lane_jac = [];
+                    Lane_resL(i) = InvMahalanobis(obj.states{I_}.left(2,J_) - obj.lane.ly(laneIdx,J_),cov);
+                    I_L_(i) = i; J_L_(i) = i; 
+                    V_L_(i) = InvMahalanobis(1,cov);
                 end
+                % Right Lane
+                n_R = length(obj.I_R);
+                Lane_resR = zeros(n_R,1);
+                I_R_ = zeros(1,n_R); J_R_ = I_R_; V_R_ = I_R_;
+                for i=1:n_R
+                    I_ = obj.I_R(i); J_ = obj.J_R(i);
+                    laneIdx = obj.lane.state_idxs(I_);
+                    cov = obj.lane.rystd(laneIdx,J_)^2;
+                    Lane_resR(i) = InvMahalanobis(obj.states{I_}.right(2,J_) - obj.lane.ry(laneIdx,J_),cov);
+                    I_R_(i) = i; J_R_(i) = i; 
+                    V_R_(i) = InvMahalanobis(1,cov);
+                end
+                Lane_jacL = horzcat(sparse(n_L,mul*n),sparse(I_L_,J_L_,V_L_,n_L,n_L+n_R+adder2));
+                Lane_jacR = horzcat(sparse(n_R,mul*n+n_L),sparse(I_R_,J_R_,V_R_,n_R,n_R+adder2));
+                Lane_res = vertcat(Lane_resL,Lane_resR);
+                Lane_jac = vertcat(Lane_jacL,Lane_jacR);
             else
                 Lane_res = []; Lane_jac = [];
-            end   
-            
-            Pr_res = [Veh_res; Bias_res; WSS_res;Lane_res];
-            Pr_jac = sparse(I,J,V,blk_height,blk_width);
-%             disp(size(Pr_jac))
-%             disp(size(Lane_jac))
-            Pr_jac = vertcat(Pr_jac,Lane_jac);
-
+            end            
+            Pr_res = vertcat(Veh_res,Bias_res,WSS_res,Lane_res,Lev_res);
+            Pr_jac = vertcat(sparse(I,J,V,blk_height,blk_width),Lane_jac,Lev_jac);
         end
         
         %% IMU Residual and Jacobian
@@ -1308,19 +1309,14 @@ classdef optimizer < handle
             % Implemented in MATLAB by JinHwan Jeon, 2022
 
             n = length(obj.states);
-            blk_width = 15*n;
+            blk_width = length(obj.opt.x0);
 %             blk_height = 15 * (n-1);
             grav = [0;0;-9.81];
 
-            if ~strcmp(obj.mode,'basic')
-                blk_width = blk_width + n;
+            if strcmp(obj.mode,'partial1') || strcmp(obj.mode,'full')
                 I_s = zeros(1,2*(n-1)); J_s = I_s; V_s = I_s;
                 s_cov = obj.covs.imu.ScaleFactorNoise;
                 WSF_res = zeros(n-1,1);
-
-                if strcmp(obj.mode,'full')
-                    blk_width = length(obj.opt.x0);
-                end
             end
             
             I_v = zeros(1,9*24*(n-1)); J_v = I_v; V_v = I_v;
@@ -1390,7 +1386,7 @@ classdef optimizer < handle
                 J_b((12*(i-1)+1):12*i) = [J_b1 J_b2 J_b3 J_b4];
                 V_b((12*(i-1)+1):12*i) = [V_b1 V_b2 V_b3 V_b4];
                 
-                if ~strcmp(obj.mode,'basic')
+                if strcmp(obj.mode,'partial1') || strcmp(obj.mode,'full')
                     % WSF residual and jacobian
                     Si = obj.states{i}.WSF; Sj = obj.states{i+1}.WSF;
                     resS = Sj - Si;
@@ -1406,7 +1402,7 @@ classdef optimizer < handle
             MM_res = [Veh_res;Bias_res];
             MM_jac = [Veh_jac;Bias_jac];
             
-            if ~strcmp(obj.mode,'basic')
+            if strcmp(obj.mode,'partial1') || strcmp(obj.mode,'full')
                 % Augment WSF residual and jacobian
                 WSF_jac = sparse(I_s,J_s,V_s,n-1,blk_width);
                 
@@ -1428,15 +1424,7 @@ classdef optimizer < handle
 
             idxs = obj.gnss.state_idxs;
             n = length(idxs);
-            
-            m = length(obj.states);
-            blk_width = 15*m;
-
-            if strcmp(obj.mode,'partial')
-                blk_width = blk_width + m;
-            elseif strcmp(obj.mode,'full')
-                blk_width = length(obj.opt.x0);
-            end
+            blk_width = length(obj.opt.x0);
             blk_height = 3*n;
             GNSS_res = zeros(blk_height,1);
             I_g = zeros(1,3*3*n); J_g = I_g; V_g = I_g;
@@ -1471,21 +1459,22 @@ classdef optimizer < handle
             % 
             % Implemented by JinHwan Jeon, 2022
 
-            if strcmp(obj.mode,'basic')
+            if strcmp(obj.mode,'basic') || strcmp(obj.mode,'partial2')
                 WSS_res = [];
                 WSS_jac = [];
             else
                 n = length(obj.states);
-                blk_width = 16*n;
-                
-                if strcmp(obj.mode,'full')
-                    blk_width = length(obj.opt.x0);
+                blk_width = length(obj.opt.x0);
+                if strcmp(obj.mode,'partial1')
+                    var_idx = 16*n;
+                elseif strcmp(obj.mode,'full')
+                    var_idx = 16*n+length(obj.I_L)+length(obj.I_R);
                 end
-                
                 L = obj.params;
     
                 WSS_res = zeros(3*(n-2),1);
-                m = 9*3+3;
+%                 m = 9*3+3;
+                m = 9*4+3;
                 I = zeros(1,m*(n-2)); J = I; V = I; 
                 wss_cov = obj.covs.wss;
 
@@ -1502,15 +1491,16 @@ classdef optimizer < handle
                     res =  1/Si * (Ri' * Vi - skew(wi - bgi - bgdi) * L) - V_meas;
                     WSS_res(3*(i-2)+1:3*(i-2)+3) = InvMahalanobis(res,wss_cov);
     
-                    [Jrv,Jbg,Js] = obj.getWSSJac(Ri,Vi,Si,wi,bgi,bgdi,L);
+                    [Jrv,Jbg,Js,JL] = obj.getWSSJac(Ri,Vi,Si,wi,bgi,bgdi,L);
 
                     [I_rv,J_rv,V_rv] = sparseFormat(3*(i-2)+1:3*(i-2)+3,9*(i-1)+1:9*(i-1)+6,InvMahalanobis(Jrv,wss_cov));
                     [I_bg,J_bg,V_bg] = sparseFormat(3*(i-2)+1:3*(i-2)+3,9*n+6*(i-1)+1:9*n+6*(i-1)+3,InvMahalanobis(Jbg,wss_cov));
                     [I_s,J_s,V_s] = sparseFormat(3*(i-2)+1:3*(i-2)+3,15*n+i,InvMahalanobis(Js,wss_cov));
+                    [I_Lev,J_Lev,V_Lev] = sparseFormat(3*(i-2)+1:3*(i-2)+3,var_idx+1:var_idx+3,InvMahalanobis(JL,wss_cov));                    
                     
-                    I(m*(i-2)+1:m*(i-1)) = [I_rv I_bg I_s];
-                    J(m*(i-2)+1:m*(i-1)) = [J_rv J_bg J_s];
-                    V(m*(i-2)+1:m*(i-1)) = [V_rv V_bg V_s];
+                    I(m*(i-2)+1:m*(i-1)) = [I_rv, I_bg, I_s, I_Lev];
+                    J(m*(i-2)+1:m*(i-1)) = [J_rv, J_bg, J_s, J_Lev];
+                    V(m*(i-2)+1:m*(i-1)) = [V_rv, V_bg, V_s, V_Lev];
                 end
 
                 WSS_jac = sparse(I,J,V,3*(n-2),blk_width);
@@ -1520,9 +1510,14 @@ classdef optimizer < handle
         %% Lane Residual and Jacobian
         function [LM_res,LM_jac] = CreateLMBlock(obj)
             % 3D Lane Factor 
-            if ~strcmp(obj.mode,'full')
+            if strcmp(obj.mode,'basic') || strcmp(obj.mode,'partial1')
                 LM_res = []; LM_jac = [];
             else
+                if strcmp(obj.mode,'partial2')
+                    mul = 15;
+                elseif strcmp(obj.mode,'full')
+                    mul = 16;
+                end
                 blk_heightL = nnz(obj.lambdaL);
                 blk_heightR = nnz(obj.lambdaR);
                 blk_width = length(obj.opt.x0);
@@ -1562,9 +1557,9 @@ classdef optimizer < handle
                     [I_L2,J_L2,V_L2] = sparseFormat(i,9*(I-1)+7:9*(I-1)+9,InvMahalanobis(Jpi,cov));
                     [I_L3,J_L3,V_L3] = sparseFormat(i,9*(I)+1:9*(I)+3,InvMahalanobis(Jrip1,cov));
                     [I_L4,J_L4,V_L4] = sparseFormat(i,9*(I)+7:9*(I)+9,InvMahalanobis(Jpip1,cov));
-                    [I_L5,J_L5,V_L5] = sparseFormat(i,15*length(obj.states)+var_idx1,InvMahalanobis(Jlij,cov));
-                    [I_L6,J_L6,V_L6] = sparseFormat(i,15*length(obj.states)+var_idx2,InvMahalanobis(Jlijp1,cov));
-                    [I_L7,J_L7,V_L7] = sparseFormat(i,15*length(obj.states)+var_idx3,InvMahalanobis(Jlip1j,cov));
+                    [I_L5,J_L5,V_L5] = sparseFormat(i,mul*length(obj.states)+var_idx1,InvMahalanobis(Jlij,cov));
+                    [I_L6,J_L6,V_L6] = sparseFormat(i,mul*length(obj.states)+var_idx2,InvMahalanobis(Jlijp1,cov));
+                    [I_L7,J_L7,V_L7] = sparseFormat(i,mul*length(obj.states)+var_idx3,InvMahalanobis(Jlip1j,cov));
                     I_JacL(15*(i-1)+1:15*i) = [I_L1,I_L2,I_L3,I_L4,I_L5,I_L6,I_L7];
                     J_JacL(15*(i-1)+1:15*i) = [J_L1,J_L2,J_L3,J_L4,J_L5,J_L6,J_L7];
                     V_JacL(15*(i-1)+1:15*i) = [V_L1,V_L2,V_L3,V_L4,V_L5,V_L6,V_L7];
@@ -1600,9 +1595,9 @@ classdef optimizer < handle
                     [I_R2,J_R2,V_R2] = sparseFormat(i,9*(I-1)+7:9*(I-1)+9,InvMahalanobis(Jpi,cov));
                     [I_R3,J_R3,V_R3] = sparseFormat(i,9*(I)+1:9*(I)+3,InvMahalanobis(Jrip1,cov));
                     [I_R4,J_R4,V_R4] = sparseFormat(i,9*(I)+7:9*(I)+9,InvMahalanobis(Jpip1,cov));
-                    [I_R5,J_R5,V_R5] = sparseFormat(i,15*length(obj.states)+var_idx1,InvMahalanobis(Jlij,cov));
-                    [I_R6,J_R6,V_R6] = sparseFormat(i,15*length(obj.states)+var_idx2,InvMahalanobis(Jlijp1,cov));
-                    [I_R7,J_R7,V_R7] = sparseFormat(i,15*length(obj.states)+var_idx3,InvMahalanobis(Jlip1j,cov));
+                    [I_R5,J_R5,V_R5] = sparseFormat(i,mul*length(obj.states)+var_idx1,InvMahalanobis(Jlij,cov));
+                    [I_R6,J_R6,V_R6] = sparseFormat(i,mul*length(obj.states)+var_idx2,InvMahalanobis(Jlijp1,cov));
+                    [I_R7,J_R7,V_R7] = sparseFormat(i,mul*length(obj.states)+var_idx3,InvMahalanobis(Jlip1j,cov));
                     I_JacR(15*(i-1)+1:15*i) = [I_R1,I_R2,I_R3,I_R4,I_R5,I_R6,I_R7];
                     J_JacR(15*(i-1)+1:15*i) = [J_R1,J_R2,J_R3,J_R4,J_R5,J_R6,J_R7];
                     V_JacR(15*(i-1)+1:15*i) = [V_R1,V_R2,V_R3,V_R4,V_R5,V_R6,V_R7];
@@ -1625,16 +1620,22 @@ classdef optimizer < handle
             obj.retractStates(state_delta);
             obj.retractBias(bias_ddelta,mode);
             
-            if ~strcmp(obj.mode,'basic')
-%                 wsf_delta = delta(15*n+1:16*n);
-%                 obj.retractWSF(wsf_delta);
-
-                if strcmp(obj.mode,'full')
-                    lane_delta = delta(15*n+1:end);
-                    obj.retractLane(lane_delta);
-                end
-            end
-            
+            if strcmp(obj.mode,'partial1')
+                wsf_delta = delta(15*n+1:16*n);
+                param_delta = delta(16*n+1:end);
+                obj.retractWSF(wsf_delta,param_delta);
+            elseif strcmp(obj.mode,'partial2')
+                lane_delta = delta(15*n+1:end);
+                obj.retractLane(lane_delta);
+            elseif strcmp(obj.mode,'full')
+                n_L = length(obj.I_L);
+                n_R = length(obj.I_R);
+                wsf_delta = delta(15*n+1:16*n);
+                lane_delta = delta(16*n+1:16*n+n_L+n_R);
+                param_delta = delta(16*n+n_L+n_R+1:end);
+                obj.retractWSF(wsf_delta,param_delta);                
+                obj.retractLane(lane_delta);
+            end            
         end
 
         %% State Retraction
@@ -1720,16 +1721,18 @@ classdef optimizer < handle
         end
         
         %% WSF Retraction
-        function obj = retractWSF(obj,wsf_delta)
+        function obj = retractWSF(obj,wsf_delta,param_delta)
             n = length(obj.states);
             for i=1:n                             
                 obj.states{i}.WSF = obj.states{i}.WSF + wsf_delta(i);
-            end            
+            end           
+            obj.params = obj.params + param_delta;
         end
         
         %% Lane Retraction
         function obj = retractLane(obj,lane_delta)
-            % add delta values to lane variables
+            % Add delta values to lane variables
+            % Change format if optimizing 3D lane measurements
             n_L = length(obj.I_L); n_R = length(obj.I_R);
             deltaL = lane_delta(1:n_L);
             deltaR = lane_delta(n_L+1:end);
@@ -1737,10 +1740,6 @@ classdef optimizer < handle
             for i=1:n_L
                 I = obj.I_L(i); J = obj.J_L(i);
                 obj.states{I}.left(2,J) = obj.states{I}.left(2,J) + deltaL(i);
-%                 if I == 159 && J == 2
-%                     disp("Delta value to Lijp1 y")
-%                     disp(deltaL(i))
-%                 end
             end
 
             for i=1:n_R
@@ -1876,13 +1875,14 @@ classdef optimizer < handle
         end
         
         %% WSS Jacobians
-        function [Jrv,Jbg,Js] = getWSSJac(Ri,Vi,Si,wi,bgi,bgdi,L)
+        function [Jrv,Jbg,Js,JL] = getWSSJac(Ri,Vi,Si,wi,bgi,bgdi,L)
             Jrv = zeros(3,6); % Horizontally Augmented for R and V
             Jrv(:,1:3) = 1/Si * skew(Ri' * Vi);
             Jrv(:,4:6) = 1/Si * Ri';
         
             Jbg = -1/Si * skew(L);
             Js = -1/Si^2 * (Ri' * Vi - skew(wi - bgi - bgdi) * L);
+            JL = -1/Si * skew(wi - bgi - bgdi);
         end
         
         %% Lane Jacobians
