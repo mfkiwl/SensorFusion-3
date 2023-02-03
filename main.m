@@ -111,7 +111,7 @@ covs_.wss = diag([1e-2,1e-4,1e-4]);
 
 % Optimization Options
 options = struct();
-options.CostThres = 1e-6;
+options.CostThres = 1e-2;
 options.StepThres = 1e-6;
 options.IterThres = 100;
 options.Algorithm = 'TR';

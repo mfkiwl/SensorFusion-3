@@ -99,7 +99,7 @@ classdef optimizer < handle
             end
             
             % Vehicle Lever Arm Vector
-            obj.params =  [1.5; 0; 0.6]; 
+            obj.params =  [1.5; 0; 0.7]; 
             
             % Lambda Array for lane matching
             obj.lambdaL = zeros(n,obj.lane.prev_num);
@@ -188,7 +188,32 @@ classdef optimizer < handle
                 obj.TrustRegion();
             end
         end
-         
+        
+        %% Lane Extraction
+        function PC = extractLane(obj)
+            % 1. Retrieve 2D lane points from optimized states
+            % 2. Retrieve 2D lane points covariance
+            % Return format: Cell-structure
+            
+            % Step 1: Retrieve 2D lane points
+            % * Be aware of Lane Changes (This part should be pre-processed)
+            % * Future work: Learning based lane change, turn detection
+            % * --> Application to pre-processing sensor data
+            % * If current state is not valid, only extract 0m previewed
+            % * If current state is valid, extract all valid points
+            PC = {[],[]};
+            n = size(obj.lane.FactorValidIntvs);
+            for i=1:n
+                lb = obj.lane.FactorValidIntvs(i,1);
+                ub = obj.lane.FactorValidIntvs(i,2);
+                pcl = zeros(3,ub-lb+1); pcr = zeros(3,ub-lb+1);
+                for j=lb:ub
+                    
+                end
+            end
+
+        end
+
         %% Visualize
         function visualize(obj)
             n = length(obj.states);
@@ -666,7 +691,7 @@ classdef optimizer < handle
                 plot(pc(1,:),pc(2,:),'c--');
             end
         end
-
+        
     end
     
     %% Private Methods
@@ -1799,6 +1824,8 @@ classdef optimizer < handle
         
         %% Extract Lane Point Covariance Information
         function obj = extractLaneCov(obj)
+            % Need to fix 
+            % Use lane covariance information after optimization
             obj.opt.LeftCov = zeros(4*length(obj.states),obj.lane.prev_num);
             obj.opt.RightCov = zeros(4*length(obj.states),obj.lane.prev_num);
             
@@ -1889,83 +1916,99 @@ classdef optimizer < handle
         function [res_fixed,Jri,Jpi,Jrip1,Jpip1,Jlij,Jlijp1,Jlip1j] = getLaneJac(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,J)
             
             res_fixed = getLaneRes(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,J);
+            lambda = (10*(J-1) - [1,0,0] * Rip1' * (Pi + Ri * Lijp1 - Pip1))/([1,0,0] * Rip1' * Ri * (Lij - Lijp1));
+
+%             delta = 1e-4; % Perturbation step
+%             % Ri Perturbation
+%             Jri = zeros(1,3);
+%             for i=1:3
+%                 perturb_vec = zeros(3,1);
+%                 perturb_vec(i) = delta;
+% 
+%                 Ri_perturbedP = Ri * Exp_map(perturb_vec);
+%                 Ri_perturbedM = Ri * Exp_map(-perturb_vec);
+%                 res_perturbedP = getLaneRes(Ri_perturbedP,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,J);
+%                 res_perturbedM = getLaneRes(Ri_perturbedM,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,J);
+%                 Jri(i) = (res_perturbedP - res_perturbedM)/(2*delta);
+%             end
+%             
+%             Jpi = zeros(1,3);
+%             for i=1:3
+%                 perturb_vec = zeros(3,1);
+%                 perturb_vec(i) = delta;
+% 
+%                 Pi_perturbedP = Pi + Ri * perturb_vec;
+%                 Pi_perturbedM = Pi - Ri * perturb_vec;
+%                 res_perturbedP = getLaneRes(Ri,Rip1,Pi_perturbedP,Pip1,Lij,Lijp1,Lip1j,J);
+%                 res_perturbedM = getLaneRes(Ri,Rip1,Pi_perturbedM,Pip1,Lij,Lijp1,Lip1j,J);
+%                 Jpi(i) = (res_perturbedP - res_perturbedM)/(2*delta);
+%             end
+% 
+%             Jrip1 = zeros(1,3);
+%             for i=1:3
+%                 perturb_vec = zeros(3,1);
+%                 perturb_vec(i) = delta;
+% 
+%                 Rip1_perturbedP = Rip1 * Exp_map(perturb_vec);
+%                 Rip1_perturbedM = Rip1 * Exp_map(-perturb_vec);
+%                 res_perturbedP = getLaneRes(Ri,Rip1_perturbedP,Pi,Pip1,Lij,Lijp1,Lip1j,J);
+%                 res_perturbedM = getLaneRes(Ri,Rip1_perturbedM,Pi,Pip1,Lij,Lijp1,Lip1j,J);
+%                 Jrip1(i) = (res_perturbedP - res_perturbedM)/(2*delta);
+%             end
+%             
+%             Jpip1 = zeros(1,3);
+%             for i=1:3
+%                 perturb_vec = zeros(3,1);
+%                 perturb_vec(i) = delta;
+% 
+%                 Pip1_perturbedP = Pip1 + Rip1 * perturb_vec;
+%                 Pip1_perturbedM = Pip1 - Rip1 * perturb_vec;
+%                 res_perturbedP = getLaneRes(Ri,Rip1,Pi,Pip1_perturbedP,Lij,Lijp1,Lip1j,J);
+%                 res_perturbedM = getLaneRes(Ri,Rip1,Pi,Pip1_perturbedM,Lij,Lijp1,Lip1j,J);
+%                 Jpip1(i) = (res_perturbedP - res_perturbedM)/(2*delta);
+%             end
+% 
+%             perturb_vec = delta;
+%             Lij_perturbedP = Lij + [0;perturb_vec;0];
+%             Lij_perturbedM = Lij - [0;perturb_vec;0];
+%             res_perturbedP = getLaneRes(Ri,Rip1,Pi,Pip1,Lij_perturbedP,Lijp1,Lip1j,J);
+%             res_perturbedM = getLaneRes(Ri,Rip1,Pi,Pip1,Lij_perturbedM,Lijp1,Lip1j,J);
+%             Jlij = (res_perturbedP - res_perturbedM)/(2*delta);
+% 
+%             perturb_vec = delta;
+%             Lijp1_perturbedP = Lijp1 + [0;perturb_vec;0];
+%             Lijp1_perturbedM = Lijp1 - [0;perturb_vec;0];
+%             res_perturbedP = getLaneRes(Ri,Rip1,Pi,Pip1,Lij,Lijp1_perturbedP,Lip1j,J);
+%             res_perturbedM = getLaneRes(Ri,Rip1,Pi,Pip1,Lij,Lijp1_perturbedM,Lip1j,J);
+%             Jlijp1 = (res_perturbedP - res_perturbedM)/(2*delta);
+% 
+%             perturb_vec = delta;
+%             Lip1j_perturbedP = Lip1j + [0;perturb_vec;0];
+%             Lip1j_perturbedM = Lip1j - [0;perturb_vec;0];
+%             res_perturbedP = getLaneRes(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j_perturbedP,J);
+%             res_perturbedM = getLaneRes(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j_perturbedM,J);
+%             Jlip1j = (res_perturbedP - res_perturbedM)/(2*delta);
+
+            Jri = -Rip1' * Ri * (skew(Lijp1) + lambda * skew(Lij - Lijp1));
+            Jpi = Rip1' * Ri;
+            Jrip1 = skew(Rip1' * (Pi + Ri * Lijp1 - Pip1)) + lambda * skew(Rip1' * Ri * (Lij - Lijp1));
+            Jpip1 = -eye(3);
             
-            delta = 1e-4; % Perturbation step
-            % Ri Perturbation
-            Jri = zeros(1,3);
-            for i=1:3
-                perturb_vec = zeros(3,1);
-                perturb_vec(i) = delta;
-
-                Ri_perturbedP = Ri * Exp_map(perturb_vec);
-                Ri_perturbedM = Ri * Exp_map(-perturb_vec);
-                res_perturbedP = getLaneRes(Ri_perturbedP,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,J);
-                res_perturbedM = getLaneRes(Ri_perturbedM,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,J);
-                Jri(i) = (res_perturbedP - res_perturbedM)/(2*delta);
-            end
+            Jlij = lambda * Rip1' * Ri;
+            Jlijp1 = (1-lambda) * Rip1' * Ri;
+            Jlip1j = -eye(3);
             
-            Jpi = zeros(1,3);
-            for i=1:3
-                perturb_vec = zeros(3,1);
-                perturb_vec(i) = delta;
+            Jri = [0,1,0] * Jri;
+            Jpi = [0,1,0] * Jpi;
+            Jrip1 = [0,1,0] * Jrip1;
+            Jpip1 = [0,1,0] * Jpip1;
+            Jlij = [0,1,0] * Jlij;
+            Jlijp1 = [0,1,0] * Jlijp1;
+            Jlip1j = [0,1,0] * Jlip1j;
 
-                Pi_perturbedP = Pi + Ri * perturb_vec;
-                Pi_perturbedM = Pi - Ri * perturb_vec;
-                res_perturbedP = getLaneRes(Ri,Rip1,Pi_perturbedP,Pip1,Lij,Lijp1,Lip1j,J);
-                res_perturbedM = getLaneRes(Ri,Rip1,Pi_perturbedM,Pip1,Lij,Lijp1,Lip1j,J);
-                Jpi(i) = (res_perturbedP - res_perturbedM)/(2*delta);
-            end
-
-            Jrip1 = zeros(1,3);
-            for i=1:3
-                perturb_vec = zeros(3,1);
-                perturb_vec(i) = delta;
-
-                Rip1_perturbedP = Rip1 * Exp_map(perturb_vec);
-                Rip1_perturbedM = Rip1 * Exp_map(-perturb_vec);
-                res_perturbedP = getLaneRes(Ri,Rip1_perturbedP,Pi,Pip1,Lij,Lijp1,Lip1j,J);
-                res_perturbedM = getLaneRes(Ri,Rip1_perturbedM,Pi,Pip1,Lij,Lijp1,Lip1j,J);
-                Jrip1(i) = (res_perturbedP - res_perturbedM)/(2*delta);
-            end
-            
-            Jpip1 = zeros(1,3);
-            for i=1:3
-                perturb_vec = zeros(3,1);
-                perturb_vec(i) = delta;
-
-                Pip1_perturbedP = Pip1 + Rip1 * perturb_vec;
-                Pip1_perturbedM = Pip1 - Rip1 * perturb_vec;
-                res_perturbedP = getLaneRes(Ri,Rip1,Pi,Pip1_perturbedP,Lij,Lijp1,Lip1j,J);
-                res_perturbedM = getLaneRes(Ri,Rip1,Pi,Pip1_perturbedM,Lij,Lijp1,Lip1j,J);
-                Jpip1(i) = (res_perturbedP - res_perturbedM)/(2*delta);
-            end
-
-            perturb_vec = delta;
-            Lij_perturbedP = Lij + [0;perturb_vec;0];
-            Lij_perturbedM = Lij - [0;perturb_vec;0];
-            res_perturbedP = getLaneRes(Ri,Rip1,Pi,Pip1,Lij_perturbedP,Lijp1,Lip1j,J);
-            res_perturbedM = getLaneRes(Ri,Rip1,Pi,Pip1,Lij_perturbedM,Lijp1,Lip1j,J);
-            Jlij = (res_perturbedP - res_perturbedM)/(2*delta);
-
-            perturb_vec = delta;
-            Lijp1_perturbedP = Lijp1 + [0;perturb_vec;0];
-            Lijp1_perturbedM = Lijp1 - [0;perturb_vec;0];
-            res_perturbedP = getLaneRes(Ri,Rip1,Pi,Pip1,Lij,Lijp1_perturbedP,Lip1j,J);
-            res_perturbedM = getLaneRes(Ri,Rip1,Pi,Pip1,Lij,Lijp1_perturbedM,Lip1j,J);
-            Jlijp1 = (res_perturbedP - res_perturbedM)/(2*delta);
-
-            perturb_vec = delta;
-            Lip1j_perturbedP = Lip1j + [0;perturb_vec;0];
-            Lip1j_perturbedM = Lip1j - [0;perturb_vec;0];
-            res_perturbedP = getLaneRes(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j_perturbedP,J);
-            res_perturbedM = getLaneRes(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j_perturbedM,J);
-            Jlip1j = (res_perturbedP - res_perturbedM)/(2*delta);
-
-%             Jri = (-Ri' * (skew(Lijp1) + lambda * Ri * skew(Lij - Lijp1)));
-%             Jpi = Rip1' * Ri;
-%             Jrip1 = (skew(Rip1' * (Pi + Ri * Lijp1 - Pip1)) + lambda * skew(Rip1' * Ri * (Lij - Lijp1)));
-%             Jpip1 = -eye(3);
 %             Jlam = Rip1' * Ri * (Lij - Lijp1);
+            
+            
         end
         
         %% Compute Dog-Leg Step for Approximate Trust Region Method
@@ -2130,20 +2173,6 @@ end
 
 %% Lane Residuals
 function res = getLaneRes(Ri,Rip1,Pi,Pip1,Lij,Lijp1,Lip1j,J)
-%     rpy_i = dcm2rpy(Ri); psi_i = rpy_i(3);
-%     rpy_ip1 = dcm2rpy(Rip1); psi_ip1 = rpy_ip1(3);
-%     R2di = [cos(psi_i), -sin(psi_i);sin(psi_i), cos(psi_i)];
-%     R2dip1 = [cos(psi_ip1), -sin(psi_ip1);sin(psi_ip1), cos(psi_ip1)];
-%     
-%     P2di = Pi(1:2); P2dip1 = Pip1(1:2);
-%     L2dij = Lij(1:2); L2dijp1 = Lijp1(1:2); 
-%     L2dip1j = Lip1j(2); % 1d variable
-
-    Qijb = Rip1' * (Pi + Ri * Lij - (Rip1 * [10*(J-1);0;0] + Pip1));
-    Qijp1b = Rip1' * (Pi + Ri * Lijp1 - (Rip1 * [10*(J-1);0;0] + Pip1));
-
-    x1 = Qijb(1); y1 = Qijb(2);
-    x2 = Qijp1b(1); y2 = Qijp1b(2);
-
-    res = (x2*y1-x1*y2)/(x2-x1) - Lip1j(2);
+    lambda = (10*(J-1) - [1,0,0] * Rip1' * (Pi + Ri * Lijp1 - Pip1))/([1,0,0] * Rip1' * Ri * (Lij - Lijp1));
+    res = [0,1,0] * (Rip1' * (Pi + Ri * Lijp1 - Pip1) + lambda * Rip1' * Ri * (Lij - Lijp1) - Lip1j);
 end
