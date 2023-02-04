@@ -2,6 +2,47 @@
 % Run this file from dataprocessing to optimization
 
 clear; close all; clc;
+
+%% Data Processing for collected .bag files
+% folder_path = "/media/jinhwan/JinHwan/SJ_Dataset/2023/2023-02-02/bag/";
+folder_path = "/media/jinhwan/JinHwan/SJ_Dataset/2023/2023-01-26/bag/";
+rosbag_read(folder_path);
+
+%% Visualize Data
+load("bag_data.mat");
+% geoplot(output.rtk.lat,output.rtk.lon,'r.')
+% geobasemap satellite
+
+% Compare with Sejong HD Map
+T1 = readgeotable("/media/jinhwan/JinHwan/SJ_Dataset/HDMap/Map2/SEC01_BRT_내부간선도로/HDMap_UTMK_타원체고/B2_SURFACELINEMARK.shp");
+T2 = readgeotable("/media/jinhwan/JinHwan/SJ_Dataset/HDMap/Map2/SEC02_세종정부청사_주변/HDMap_UTMK_타원체고/B2_SURFACELINEMARK.shp");
+mapshow(T1,'Color','blue','LineStyle','--','Marker','.','MarkerEdgeColor','red'); hold on; axis equal; grid on;
+mapshow(T2,'Color','blue','LineStyle','--','Marker','.','MarkerEdgeColor','red')
+p = projcrs(32652); % Projected Coordinate Reference System
+[rtk_x,rtk_y] = projfwd(p,output.rtk.lat',output.rtk.lon');
+[rt_x,rt_y] = projfwd(p,output.rtgps.lat',output.rtgps.lon');
+p_rtk = plot(rtk_x,rtk_y,'c.');
+p_rt = plot(rt_x,rt_y,'g.');
+
+xlabel('UTM-K X(m)'); ylabel('UTM-K Y(m)');
+% title(filename)
+legend([p_rtk,p_rt],'RTK','OxTS RT3100')
+
+%% For Checking rlog files
+
+T1 = readgeotable("/media/jinhwan/JinHwan/SJ_Dataset/HDMap/Map2/SEC01_BRT_내부간선도로/HDMap_UTMK_타원체고/B2_SURFACELINEMARK.shp");
+T2 = readgeotable("/media/jinhwan/JinHwan/SJ_Dataset/HDMap/Map2/SEC02_세종정부청사_주변/HDMap_UTMK_타원체고/B2_SURFACELINEMARK.shp");
+mapshow(T1,'Color','blue','LineStyle','--','Marker','.','MarkerEdgeColor','red'); hold on; axis equal; grid on;
+mapshow(T2,'Color','blue','LineStyle','--','Marker','.','MarkerEdgeColor','red')
+p = projcrs(32652); % Projected Coordinate Reference System
+[gps_x,gps_y] = projfwd(p,gnss.lat',gnss.lon');
+
+p_gps = plot(gps_x,gps_y,'k.');
+xlabel('UTM-K X(m)'); ylabel('UTM-K Y(m)');
+
+
+
+
 %% Load Raw Data (Not 'really' raw, take a look at 'dataloader.py')
 
 % [Sejong Dataset Scenarios]
