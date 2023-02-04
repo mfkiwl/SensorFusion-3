@@ -209,13 +209,49 @@ classdef optimizer < handle
             for i=1:n
                 lb = obj.lane.FactorValidIntvs(i,1);
                 ub = obj.lane.FactorValidIntvs(i,2);
-                pcl = zeros(3,ub-lb+1); pcr = zeros(3,ub-lb+1);
+                Left_arr = PC{left_idc};
+                Right_arr = PC{right_idc};
+                n_l = nnz(obj.validL(lb:ub,:));
+                n_r = nnz(obj.validR(lb:ub,:));
+                pcl = zeros(3,n_l); pcr = zeros(3,n_r);
+                
+                cntL = 1; cntR = 1;
                 for j=lb:ub
+                    R = obj.states{j}.R; P = obj.states{j}.P;
+                    Left = obj.states{j}.left;
+                    Right = obj.states{j}.right;
+                    % Left Lane
+                    if obj.validL(j,1) == 1
+                        for k=1:obj.lane.prev_num
+                            if obj.validL(j,k) == 1
+                                pcl(:,cntL) = P + R * Left(:,k);
+                                cntL = cntL + 1;
+                            end
+                        end
+                    else
+                        pcl(:,cntL) = P + R * Left(:,1);
+                        cntL = cntL + 1;
+                    end
                     
+                    % Right Lane
+                    if obj.validR(j,1) == 1
+                        for k=1:obj.lane.prev_num
+                            if obj.validR(j,k) == 1
+                                pcr(:,cntR) = P + R * Right(:,k);
+                                cntR = cntR + 1;
+                            end
+                        end
+                    else
+                        pcr(:,cntR) = P + R * Right(:,1);
+                        cntR = cntR + 1;
+                    end                    
                 end
+                Left_arr = [Left_arr, pcl];
+                Right_arr = [Right_arr, pcr];
 
                 % Increase or decrease the left/right indicators when lane
                 % change is detected
+                
             end
 
         end
