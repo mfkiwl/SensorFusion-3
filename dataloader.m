@@ -4,5 +4,6 @@ function [bag_data,rlog_data] = dataloader(date)
     rlog_data_path = strcat('/media/jinhwan/JinHwan/SJ_Dataset/2023/',date,'/rlog/rlog_data.mat');
     bag_data_path = strcat('/media/jinhwan/JinHwan/SJ_Dataset/2023/',date,'/bag/bag_data.mat');
     rlog_data = load(rlog_data_path);
-    bag_data = load(bag_data_path,'output');
+    bag = load(bag_data_path);
+    bag_data = bag.output;
 end

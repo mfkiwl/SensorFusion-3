@@ -25,6 +25,7 @@ end
 date = '2023-01-20';
 [bag_data,rlog_data] = dataloader(date);
 
+% Process data using timestamps from bag_data and rlog_data
 
 %%
 load("bag_data.mat");

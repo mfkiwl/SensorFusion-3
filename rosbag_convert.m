@@ -183,15 +183,14 @@ function output = rosbag_convert(filename)
     tempmsg = readMessages(tempbag,'DataFormat','struct');
     templen = length(tempmsg);
     
+    msgname = 'rtk';
     output.(msgname) = struct();
     output.(msgname).t = zeros(1,templen);
     output.(msgname).lat = zeros(1,templen);
     output.(msgname).lon = zeros(1,templen);
     output.(msgname).alt = zeros(1,templen);
     output.(msgname).cov = zeros(9,templen);
-    
-    
-    msgname = 'rtk';
+
     for i=1:length(tempmsg)
         msg = tempmsg{i};
         output.(msgname).t(i) = double(msg.Header.Stamp.Sec) + double(msg.Header.Stamp.Nsec)*1e-9;
