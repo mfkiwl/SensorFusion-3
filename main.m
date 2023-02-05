@@ -4,14 +4,30 @@
 clear; close all; clc;
 
 %% Data Processing for collected .bag files
-% folder_path = "/media/jinhwan/JinHwan/SJ_Dataset/2023/2023-02-02/bag/";
-folder_path = "/media/jinhwan/JinHwan/SJ_Dataset/2023/2023-01-26/bag/";
-rosbag_read(folder_path);
+% Add new dates for new data collection
+folder_paths = ["/media/jinhwan/JinHwan/SJ_Dataset/2023/2023-01-20/bag/", ...
+                "/media/jinhwan/JinHwan/SJ_Dataset/2023/2023-01-26/bag/", ...
+                "/media/jinhwan/JinHwan/SJ_Dataset/2023/2023-01-27/bag/", ...
+                "/media/jinhwan/JinHwan/SJ_Dataset/2023/2023-01-29/bag/", ...
+                "/media/jinhwan/JinHwan/SJ_Dataset/2023/2023-02-02/bag/"];
 
-%% Visualize Data
+for i=1:length(folder_paths)
+    folder_path = folder_paths(i);
+    date_full = convertStringsToChars(folder_path);
+    date = date_full(end-14:end-5);
+    disp(['Processing files in ',date])
+    rosbag_read(folder_paths(i))
+end
+
+%% Load data from date input
+% This assumes that all the rlog data are pre-processed using the python
+% sript DataProcessor.py
+date = '2023-01-20';
+[bag_data,rlog_data] = dataloader(date);
+
+
+%%
 load("bag_data.mat");
-% geoplot(output.rtk.lat,output.rtk.lon,'r.')
-% geobasemap satellite
 
 % Compare with Sejong HD Map
 T1 = readgeotable("/media/jinhwan/JinHwan/SJ_Dataset/HDMap/Map2/SEC01_BRT_내부간선도로/HDMap_UTMK_타원체고/B2_SURFACELINEMARK.shp");
@@ -22,11 +38,11 @@ p = projcrs(32652); % Projected Coordinate Reference System
 [rtk_x,rtk_y] = projfwd(p,output.rtk.lat',output.rtk.lon');
 [rt_x,rt_y] = projfwd(p,output.rtgps.lat',output.rtgps.lon');
 p_rtk = plot(rtk_x,rtk_y,'c.');
-p_rt = plot(rt_x,rt_y,'g.');
+% p_rt = plot(rt_sx,rt_y,'g.');
 
 xlabel('UTM-K X(m)'); ylabel('UTM-K Y(m)');
 % title(filename)
-legend([p_rtk,p_rt],'RTK','OxTS RT3100')
+legend(p_rtk,'RTK')
 
 %% For Checking rlog files
 
